@@ -31,9 +31,10 @@ jobs:
         id: bump
         run: |
           CURRENT=$(uv run python -c "
-          import tomllib
-          with open('pyproject.toml', 'rb') as f:
-              print(tomllib.load(f)['project']['version'])
+          import re
+          with open('pyproject.toml') as f:
+              content = f.read()
+          print(re.search(r'(?m)^\[project\].*?^version\s*=\s*\"([^\"]+)\"', content, re.DOTALL).group(1))
           ")
 
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
