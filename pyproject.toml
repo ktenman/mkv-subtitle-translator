@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mkv-subtitle-translator"
-version = "0.1.0"
+version = "0.1.1"
 description = "Translate SRT subtitles to Estonian via OpenRouter (200+ models), with automatic MKV extraction and merging"
 readme = "README.md"
 requires-python = ">=3.10"
