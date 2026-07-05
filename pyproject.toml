@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "translate-subs-openrouter"
+version = "0.1.0"
+description = "Translate SRT subtitles to Estonian via OpenRouter (200+ models), with automatic MKV extraction and merging"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+    "httpx>=0.27",
+    "tqdm>=4.66",
+    "typer>=0.12",
+    "rich>=13.7",
+    "packaging>=24.0",
+]
+
+[project.scripts]
+translate-subs-openrouter = "translate_subs_openrouter.cli:main"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.6",
+    "pytest>=8.0",
+    "pytest-mock>=3.14",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/translate_subs_openrouter"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: tests requiring a real OpenRouter API key and network access"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "UP",    # pyupgrade
+    "B",     # flake8-bugbear
+    "SIM",   # flake8-simplify
+    "RUF",   # ruff-specific rules
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["translate_subs_openrouter"]
