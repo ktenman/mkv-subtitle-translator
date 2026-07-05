@@ -16,16 +16,16 @@ from packaging.version import Version
 from rich.console import Console
 from rich.table import Table
 
-from translate_subs_openrouter.mkv import extract_best_subtitle_from_mkv, merge_subtitles_into_mkv
-from translate_subs_openrouter.models import DEFAULT_MODEL, SUBTITLE_MODELS
-from translate_subs_openrouter.translator import OpenRouterTranslator, deduplicate_subtitles
+from mkv_subtitle_translator.mkv import extract_best_subtitle_from_mkv, merge_subtitles_into_mkv
+from mkv_subtitle_translator.models import DEFAULT_MODEL, SUBTITLE_MODELS
+from mkv_subtitle_translator.translator import OpenRouterTranslator, deduplicate_subtitles
 
 logger = logging.getLogger(__name__)
 
-GITHUB_REPO = "ktenman/translate-subs-openrouter"
+GITHUB_REPO = "ktenman/mkv-subtitle-translator"
 
 app = typer.Typer(
-    name="translate-subs-openrouter",
+    name="mkv-subtitle-translator",
     help="Translate SRT subtitles to Estonian using OpenRouter (200+ models).",
     add_completion=False,
 )
@@ -52,13 +52,13 @@ def _check_and_upgrade(current: str) -> None:
         return
 
     if Version(current) >= Version(latest):
-        logger.info("translate-subs-openrouter is up to date (v%s)", current)
+        logger.info("mkv-subtitle-translator is up to date (v%s)", current)
         return
 
     logger.info("New version available: v%s (current: v%s)", latest, current)
     console.print(f"[yellow]Upgrading v{current} -> v{latest}...[/yellow]")
     upgrade_commands = [
-        ["uv", "tool", "upgrade", "translate-subs-openrouter"],
+        ["uv", "tool", "upgrade", "mkv-subtitle-translator"],
         ["uv", "pip", "install", "--upgrade", f"git+https://github.com/{GITHUB_REPO}.git"],
     ]
     for cmd in upgrade_commands:
@@ -74,7 +74,7 @@ def _check_and_upgrade(current: str) -> None:
     logger.warning("All upgrade methods failed")
     console.print(
         "[yellow]Auto-upgrade failed. Run manually:[/yellow]\n"
-        "  uv tool upgrade translate-subs-openrouter"
+        "  uv tool upgrade mkv-subtitle-translator"
     )
 
 
@@ -187,8 +187,8 @@ def _main(
     max_workers: Annotated[int, typer.Option("--max-workers", help="Max parallel workers")] = 8,
 ) -> None:
     """Translate subtitles to Estonian using OpenRouter (200+ models)."""
-    current_version = version("translate-subs-openrouter")
-    console.print(f"[dim]translate-subs-openrouter v{current_version}[/dim]")
+    current_version = version("mkv-subtitle-translator")
+    console.print(f"[dim]mkv-subtitle-translator v{current_version}[/dim]")
     _check_and_upgrade(current_version)
 
     if list_models_flag:

@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "translate-subs-openrouter"
+name = "mkv-subtitle-translator"
 version = "0.1.0"
 description = "Translate SRT subtitles to Estonian via OpenRouter (200+ models), with automatic MKV extraction and merging"
 readme = "README.md"
@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
-translate-subs-openrouter = "translate_subs_openrouter.cli:main"
+mkv-subtitle-translator = "mkv_subtitle_translator.cli:main"
 
 [dependency-groups]
 dev = [
@@ -28,7 +28,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/translate_subs_openrouter"]
+packages = ["src/mkv_subtitle_translator"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -51,4 +51,4 @@ select = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["translate_subs_openrouter"]
+known-first-party = ["mkv_subtitle_translator"]

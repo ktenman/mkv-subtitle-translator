@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from translate_subs_openrouter.models import Subtitle
-from translate_subs_openrouter.translator import OpenRouterTranslator, deduplicate_subtitles
+from mkv_subtitle_translator.models import Subtitle
+from mkv_subtitle_translator.translator import OpenRouterTranslator, deduplicate_subtitles
 
 SAMPLE_SRT = """1
 00:00:01,000 --> 00:00:02,000

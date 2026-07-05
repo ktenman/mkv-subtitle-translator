@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from translate_subs_openrouter.linebreak import restore_line_break
+from mkv_subtitle_translator.linebreak import restore_line_break
 
 
 class TestRestoreLineBreak:

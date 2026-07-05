@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from translate_subs_openrouter.analyzer import SubtitleAnalyzer
-from translate_subs_openrouter.models import SubtitleType
+from mkv_subtitle_translator.analyzer import SubtitleAnalyzer
+from mkv_subtitle_translator.models import SubtitleType
 
 
 class TestDetectSubtitleType:

@@ -8,10 +8,10 @@ from datetime import datetime
 
 from tqdm import tqdm
 
-from translate_subs_openrouter.analyzer import SubtitleAnalyzer
-from translate_subs_openrouter.client import OpenRouterClient
-from translate_subs_openrouter.linebreak import restore_line_break
-from translate_subs_openrouter.models import DEFAULT_MODEL, Subtitle, SubtitleType, TranslationStats
+from mkv_subtitle_translator.analyzer import SubtitleAnalyzer
+from mkv_subtitle_translator.client import OpenRouterClient
+from mkv_subtitle_translator.linebreak import restore_line_break
+from mkv_subtitle_translator.models import DEFAULT_MODEL, Subtitle, SubtitleType, TranslationStats
 
 
 class OpenRouterTranslator:

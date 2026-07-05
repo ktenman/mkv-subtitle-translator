@@ -4,7 +4,7 @@ import time
 
 import httpx
 
-from translate_subs_openrouter.models import DEFAULT_MODEL, SUBTITLE_MODELS, TranslationStats
+from mkv_subtitle_translator.models import DEFAULT_MODEL, SUBTITLE_MODELS, TranslationStats
 
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 

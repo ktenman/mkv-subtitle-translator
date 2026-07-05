@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from translate_subs_openrouter.models import DEFAULT_MODEL, SUBTITLE_MODELS, Subtitle, SubtitleType
+from mkv_subtitle_translator.models import DEFAULT_MODEL, SUBTITLE_MODELS, Subtitle, SubtitleType
 
 
 class TestSubtitleModels:

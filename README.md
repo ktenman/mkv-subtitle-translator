@@ -1,4 +1,4 @@
-# translate-subs-openrouter
+# mkv-subtitle-translator
 
 Translate SRT subtitles to Estonian using OpenRouter's API (200+ models), with automatic MKV subtitle extraction and merging.
 
@@ -7,7 +7,7 @@ Supports multi-model translation (GPT-5.x, Claude, Gemini, and budget models), c
 ## Installation
 
 ```bash
-uv tool install git+https://github.com/ktenman/translate-subs-openrouter
+uv tool install git+https://github.com/ktenman/mkv-subtitle-translator
 ```
 
 Requires `ffmpeg`/`ffprobe` on `PATH` for MKV extraction and merging.
@@ -16,22 +16,22 @@ Requires `ffmpeg`/`ffprobe` on `PATH` for MKV extraction and merging.
 
 ```bash
 # Translate every .mkv in the current directory with the default model (gpt-5.4)
-translate-subs-openrouter
+mkv-subtitle-translator
 
 # Translate a specific file
-translate-subs-openrouter -f episode.mkv
+mkv-subtitle-translator -f episode.mkv
 
 # Use a different model
-translate-subs-openrouter -f episode.mkv --model gpt-5.4-pro
+mkv-subtitle-translator -f episode.mkv --model gpt-5.4-pro
 
 # List available models
-translate-subs-openrouter --list-models
+mkv-subtitle-translator --list-models
 
 # Estimate cost before translating
-translate-subs-openrouter --estimate episode.mkv
+mkv-subtitle-translator --estimate episode.mkv
 
 # Re-translate even if a .et.srt already exists
-translate-subs-openrouter -f episode.mkv --force
+mkv-subtitle-translator -f episode.mkv --force
 ```
 
 Requires an OpenRouter API key, via `--api-key` or the `OPENROUTER_API_KEY` environment variable. Get one at https://openrouter.ai/keys.

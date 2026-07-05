@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from translate_subs_openrouter.models import SubtitleType
+from mkv_subtitle_translator.models import SubtitleType
 
 
 class SubtitleAnalyzer:

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typer.testing import CliRunner
 
-from translate_subs_openrouter.cli import app
-from translate_subs_openrouter.models import DEFAULT_MODEL
+from mkv_subtitle_translator.cli import app
+from mkv_subtitle_translator.models import DEFAULT_MODEL
 
 runner = CliRunner()
 
