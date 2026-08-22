@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from typer.testing import CliRunner
 
 from mkv_subtitle_translator.cli import app
@@ -55,4 +56,11 @@ def test_codex_model_needs_no_api_key(tmp_path, monkeypatch):
 
 def test_unknown_effort_is_rejected():
     result = runner.invoke(app, ["--effort", "turbo", "--list-models"])
+    assert result.exit_code != 0
+
+
+@pytest.mark.parametrize("size", ["0", "-5"])
+def test_non_positive_chunk_size_is_rejected(size):
+    # A non-positive size yields zero batches, which would write English as Estonian.
+    result = runner.invoke(app, ["--chunk-size", size, "--list-models"])
     assert result.exit_code != 0

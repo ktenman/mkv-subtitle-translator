@@ -25,9 +25,12 @@ CODEX_INSTALL_HINT = "codex CLI not found on PATH. Install: npm install -g @open
 CLAUDE_INSTALL_HINT = "claude CLI not found on PATH. See https://claude.com/claude-code"
 
 # Covers codex (UsageLimitReached, QuotaExceeded, "rate limit") and Claude Code
-# ("Usage limit reached", "Credit balance is too low", rate_limit_error).
+# ("Usage limit reached", "Credit balance is too low", rate_limit_error). Kept
+# specific on purpose: a false match demotes a free backend onto the paid one,
+# and the text we search includes stdout, which echoes "[429] ..." subtitle lines.
 _QUOTA_PATTERN = re.compile(
-    r"usage.?limit|rate.?limit|quota|credit balance|insufficient|out of credits|\b429\b",
+    r"usage.?limit|rate.?limit|too many requests|quota|credit balance"
+    r"|out of credits|insufficient.{0,20}(credit|quota|balance|fund)",
     re.IGNORECASE,
 )
 
@@ -37,8 +40,12 @@ class QuotaExhausted(RuntimeError):
 
 
 def _error(name: str, detail: str) -> Exception:
-    detail = detail.strip()[-500:]
-    if _QUOTA_PATTERN.search(detail):
+    # Search the whole output, report only the tail: the quota line is often
+    # buried above a long transcript, and truncating first would lose it.
+    detail = detail.strip()
+    quota = _QUOTA_PATTERN.search(detail)
+    detail = detail[-500:]
+    if quota:
         return QuotaExhausted(f"{name} is out of credits: {detail}")
     return RuntimeError(f"{name} failed: {detail}")
 
@@ -164,7 +171,7 @@ class ClaudeClient:
 
         try:
             last = json.loads(result.stdout)[-1]
-        except (json.JSONDecodeError, IndexError) as exc:
+        except (json.JSONDecodeError, IndexError, KeyError, TypeError) as exc:
             raise _error("claude", detail) from exc
 
         if last.get("is_error"):

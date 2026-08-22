@@ -106,6 +106,34 @@ class TestTranslate:
         with pytest.raises(QuotaExhausted):
             CodexClient("codex").translate("system", "user")
 
+    def test_quota_signal_above_a_long_transcript_is_still_seen(self, mocker):
+        mocker.patch(
+            "mkv_subtitle_translator.backends.subprocess.run",
+            side_effect=_fake_run(returncode=1, stderr="UsageLimitReached\n" + "noise\n" * 300),
+        )
+
+        with pytest.raises(QuotaExhausted):
+            CodexClient("codex").translate("system", "user")
+
+    @pytest.mark.parametrize(
+        "stderr",
+        [
+            "[429] Ta ütles, et tuleb tagasi.",  # echoed subtitle line, not an HTTP status
+            "insufficient disk space in /tmp",
+            "stream disconnected before completion",
+        ],
+    )
+    def test_ordinary_failures_are_not_mistaken_for_quota(self, mocker, stderr):
+        # A false match here silently demotes a free backend onto the paid one.
+        mocker.patch(
+            "mkv_subtitle_translator.backends.subprocess.run",
+            side_effect=_fake_run(returncode=1, stderr=stderr),
+        )
+
+        with pytest.raises(RuntimeError) as exc:
+            CodexClient("codex").translate("system", "user")
+        assert not isinstance(exc.value, QuotaExhausted)
+
 
 class TestClaudeTranslate:
     def test_returns_result_field(self, mocker):

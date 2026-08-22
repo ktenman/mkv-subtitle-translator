@@ -92,6 +92,14 @@ def _validate_model(value: str) -> str:
     return value
 
 
+def _validate_chunk_size(value: int | None) -> int | None:
+    # A non-positive size makes range() yield no batches at all, which would
+    # write the untranslated English out as if it were Estonian.
+    if value is not None and value < 1:
+        raise typer.BadParameter("Chunk size must be at least 1")
+    return value
+
+
 def _validate_effort(value: str) -> str:
     if value not in REASONING_EFFORTS:
         raise typer.BadParameter(
@@ -210,6 +218,7 @@ def _main(
         typer.Option(
             "--chunk-size",
             help=f"Chunk size (default: {DEFAULT_BATCH_SIZE} for CLIs, {API_CHUNK_SIZE} otherwise)",
+            callback=_validate_chunk_size,
         ),
     ] = None,
     max_workers: Annotated[int, typer.Option("--max-workers", help="Max parallel workers")] = 8,
