@@ -9,16 +9,40 @@ from datetime import datetime
 from tqdm import tqdm
 
 from mkv_subtitle_translator.analyzer import SubtitleAnalyzer
-from mkv_subtitle_translator.client import OpenRouterClient
+from mkv_subtitle_translator.backends import (
+    API_CHUNK_SIZE,
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_EFFORT,
+    QuotaExhausted,
+    build_chain,
+    uses_cli,
+)
 from mkv_subtitle_translator.linebreak import restore_line_break
-from mkv_subtitle_translator.models import DEFAULT_MODEL, Subtitle, SubtitleType, TranslationStats
+from mkv_subtitle_translator.models import (
+    DEFAULT_MODEL,
+    Subtitle,
+    SubtitleType,
+    TranslationStats,
+)
+
+# Openers mapped to the closers that count as a matching pair.
+_QUOTE_PAIRS = {'"': '"', "'": "'", "„": "“”", "“": "”", "«": "»"}
+
+
+def strip_wrapping_quotes(text: str) -> str:
+    """Drop quotes that wrap the whole line, keeping quotes inside it."""
+    text = text.strip()
+    if len(text) > 1 and text[-1] in _QUOTE_PAIRS.get(text[0], ""):
+        return text[1:-1].strip()
+    return text
 
 
 class OpenRouterTranslator:
-    """Subtitle translator using OpenRouter API"""
+    """Subtitle translator using the Codex/Claude CLIs or the OpenRouter API"""
 
-    def __init__(self, api_key: str, model: str = DEFAULT_MODEL):
-        self.client = OpenRouterClient(api_key, model)
+    def __init__(self, api_key: str, model: str = DEFAULT_MODEL, effort: str = DEFAULT_EFFORT):
+        self.model = model
+        self.client = build_chain(model, effort, api_key)
         self.analyzer = SubtitleAnalyzer()
         self.context_window_size = 5  # Increased for better context
         self.glossary = self._create_translation_glossary()
@@ -178,7 +202,7 @@ Preserve any formatting or emphasis from the original."""
                 )
 
                 # Clean up response (remove quotes if present)
-                translated_text = translated_text.strip("\"'")
+                translated_text = strip_wrapping_quotes(translated_text)
                 subtitle.translated_text = translated_text
 
                 # Update stats
@@ -193,6 +217,9 @@ Preserve any formatting or emphasis from the original."""
                 # Rate limiting
                 time.sleep(0.05)
 
+            except QuotaExhausted:
+                # Same rule as the batch path: never fall back to the English text.
+                raise
             except Exception as e:
                 print(f"\nTranslation error for #{subtitle.index}: {e}")
                 subtitle.translated_text = subtitle.text
@@ -263,7 +290,7 @@ Return each line as [number] Estonian translation.
                     match = re.match(r"\[(\d+)\]\s*(.*)", line)
                     if match:
                         idx = match.group(1)
-                        trans = match.group(2).strip()
+                        trans = strip_wrapping_quotes(match.group(2))
                         translations[idx] = trans
 
                 # Apply translations
@@ -286,6 +313,10 @@ Return each line as [number] Estonian translation.
 
                 pbar.update(1)
 
+            except QuotaExhausted:
+                # Every backend is dry - keep going and we'd write English as Estonian.
+                pbar.close()
+                raise
             except Exception as e:
                 print(f"\n  Batch {batch_idx + 1} error: {e}")
                 for sub in batch:
@@ -303,9 +334,12 @@ Return each line as [number] Estonian translation.
         return subtitles
 
     def translate_subtitles(
-        self, subtitles: list[Subtitle], chunk_size: int = 50, max_workers: int = 8
+        self, subtitles: list[Subtitle], chunk_size: int | None = None, max_workers: int = 8
     ) -> list[Subtitle]:
         """Translate subtitles - uses batch mode for large-context models"""
+        if chunk_size is None:
+            chunk_size = DEFAULT_BATCH_SIZE if uses_cli(self.model) else API_CHUNK_SIZE
+
         # Auto-detect batch mode for models that support it
         if self.client.model_config.get("supports_batch"):
             return self._batch_translate(subtitles, batch_size=chunk_size)
@@ -335,6 +369,9 @@ Return each line as [number] Estonian translation.
                 try:
                     future.result()
                     pbar.update(1)
+                except QuotaExhausted:
+                    pbar.close()
+                    raise
                 except Exception as e:
                     print(f"\nChunk error: {e}")
 

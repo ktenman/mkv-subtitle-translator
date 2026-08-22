@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from typer.testing import CliRunner
 
 from mkv_subtitle_translator.cli import app
@@ -39,8 +40,27 @@ def test_estimate_existing_file_reports_cost(tmp_path):
     assert "Cost Estimate" in result.stdout
 
 
-def test_missing_api_key_errors(tmp_path, monkeypatch):
+def test_missing_api_key_errors_for_openrouter_models(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    result = runner.invoke(app, [str(tmp_path)])
+    result = runner.invoke(app, [str(tmp_path), "--model", "gpt-5.4"])
     assert result.exit_code != 0
     assert "API key required" in result.stdout
+
+
+def test_codex_model_needs_no_api_key(tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    result = runner.invoke(app, [str(tmp_path), "--model", "codex"])
+    assert result.exit_code == 0
+    assert "No files to translate" in result.stdout
+
+
+def test_unknown_effort_is_rejected():
+    result = runner.invoke(app, ["--effort", "turbo", "--list-models"])
+    assert result.exit_code != 0
+
+
+@pytest.mark.parametrize("size", ["0", "-5"])
+def test_non_positive_chunk_size_is_rejected(size):
+    # A non-positive size yields zero batches, which would write English as Estonian.
+    result = runner.invoke(app, ["--chunk-size", size, "--list-models"])
+    assert result.exit_code != 0

@@ -1,7 +1,18 @@
 from __future__ import annotations
 
+import pytest
+
+from mkv_subtitle_translator.backends import (
+    API_CHUNK_SIZE,
+    DEFAULT_BATCH_SIZE,
+    QuotaExhausted,
+)
 from mkv_subtitle_translator.models import Subtitle
-from mkv_subtitle_translator.translator import OpenRouterTranslator, deduplicate_subtitles
+from mkv_subtitle_translator.translator import (
+    OpenRouterTranslator,
+    deduplicate_subtitles,
+    strip_wrapping_quotes,
+)
 
 SAMPLE_SRT = """1
 00:00:01,000 --> 00:00:02,000
@@ -67,6 +78,20 @@ class TestWriteSrt:
         assert text_block == "[uks kriuksub]"
 
 
+class TestStripWrappingQuotes:
+    def test_strips_estonian_quotes_codex_likes_to_add(self):
+        assert strip_wrapping_quotes("„Tere, kullake.“") == "Tere, kullake."
+
+    def test_strips_straight_quotes(self):
+        assert strip_wrapping_quotes('"Tere"') == "Tere"
+
+    def test_keeps_quotes_inside_the_line(self):
+        assert strip_wrapping_quotes('"Ma tulen," ütles ta.') == '"Ma tulen," ütles ta.'
+
+    def test_leaves_unquoted_text_alone(self):
+        assert strip_wrapping_quotes("Tere") == "Tere"
+
+
 class TestDeduplicateSubtitles:
     def test_removes_exact_duplicates(self):
         a = Subtitle(index="1", timestamp="t1", text="Hi")
@@ -101,3 +126,38 @@ class TestTranslateChunk:
         assert sub.translated_text == "Tere"
         translate_mock.assert_called_once()
         assert translator.translation_cache["Hi"] == "Tere"
+
+
+class TestBatchTranslate:
+    def test_exhausted_chain_raises_instead_of_writing_english(self, mocker):
+        translator = OpenRouterTranslator("", "codex")
+        sub = Subtitle(index="1", timestamp="t1", text="Hi")
+        mocker.patch.object(
+            translator.client, "translate", side_effect=QuotaExhausted("all backends dry")
+        )
+
+        with pytest.raises(QuotaExhausted):
+            translator.translate_subtitles([sub])
+
+        assert sub.translated_text is None
+
+
+class TestChunkSizeDefault:
+    @pytest.mark.parametrize(
+        ("model", "expected"), [("codex", DEFAULT_BATCH_SIZE), ("gpt-5.4", API_CHUNK_SIZE)]
+    )
+    def test_cli_backends_batch_bigger_than_the_api(self, mocker, model, expected):
+        translator = OpenRouterTranslator("dummy-key", model)
+        batch = mocker.patch.object(translator, "_batch_translate")
+
+        translator.translate_subtitles([Subtitle(index="1", timestamp="t1", text="Hi")])
+
+        assert batch.call_args.kwargs["batch_size"] == expected
+
+    def test_explicit_chunk_size_wins(self, mocker):
+        translator = OpenRouterTranslator("", "codex")
+        batch = mocker.patch.object(translator, "_batch_translate")
+
+        translator.translate_subtitles([Subtitle(index="1", timestamp="t1", text="Hi")], 25)
+
+        assert batch.call_args.kwargs["batch_size"] == 25

@@ -16,6 +16,14 @@ from packaging.version import Version
 from rich.console import Console
 from rich.table import Table
 
+from mkv_subtitle_translator.backends import (
+    API_CHUNK_SIZE,
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_EFFORT,
+    REASONING_EFFORTS,
+    QuotaExhausted,
+    uses_cli,
+)
 from mkv_subtitle_translator.mkv import extract_best_subtitle_from_mkv, merge_subtitles_into_mkv
 from mkv_subtitle_translator.models import DEFAULT_MODEL, SUBTITLE_MODELS
 from mkv_subtitle_translator.translator import OpenRouterTranslator, deduplicate_subtitles
@@ -26,7 +34,7 @@ GITHUB_REPO = "ktenman/mkv-subtitle-translator"
 
 app = typer.Typer(
     name="mkv-subtitle-translator",
-    help="Translate SRT subtitles to Estonian using OpenRouter (200+ models).",
+    help="Translate SRT subtitles to Estonian via the Codex CLI or OpenRouter.",
     add_completion=False,
 )
 console = Console()
@@ -81,6 +89,14 @@ def _check_and_upgrade(current: str) -> None:
 def _validate_model(value: str) -> str:
     if value not in SUBTITLE_MODELS:
         raise typer.BadParameter(f"Unknown model '{value}'. Run --list-models to see options.")
+    return value
+
+
+def _validate_effort(value: str) -> str:
+    if value not in REASONING_EFFORTS:
+        raise typer.BadParameter(
+            f"Unknown effort '{value}'. Choose from: {', '.join(REASONING_EFFORTS)}"
+        )
     return value
 
 
@@ -166,6 +182,14 @@ def _main(
             callback=_validate_model,
         ),
     ] = DEFAULT_MODEL,
+    effort: Annotated[
+        str,
+        typer.Option(
+            "--effort",
+            help=f"Codex reasoning effort: {', '.join(REASONING_EFFORTS)}",
+            callback=_validate_effort,
+        ),
+    ] = DEFAULT_EFFORT,
     list_models_flag: Annotated[
         bool, typer.Option("--list-models", help="List available models")
     ] = False,
@@ -182,11 +206,17 @@ def _main(
         bool, typer.Option("--force", help="Force retranslation even if output exists")
     ] = False,
     chunk_size: Annotated[
-        int, typer.Option("--chunk-size", help="Chunk size for parallel processing")
-    ] = 50,
+        int | None,
+        typer.Option(
+            "--chunk-size",
+            help=f"Chunk size (default: {DEFAULT_BATCH_SIZE} for CLIs, {API_CHUNK_SIZE} otherwise)",
+            # Below 1, range() yields no batches and the English gets written as Estonian.
+            min=1,
+        ),
+    ] = None,
     max_workers: Annotated[int, typer.Option("--max-workers", help="Max parallel workers")] = 8,
 ) -> None:
-    """Translate subtitles to Estonian using OpenRouter (200+ models)."""
+    """Translate subtitles to Estonian via the Codex CLI or OpenRouter."""
     current_version = version("mkv-subtitle-translator")
     console.print(f"[dim]mkv-subtitle-translator v{current_version}[/dim]")
     _check_and_upgrade(current_version)
@@ -202,8 +232,8 @@ def _main(
         estimate_cost(estimate, model)
         raise typer.Exit(0)
 
-    resolved_api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
-    if not resolved_api_key:
+    resolved_api_key = api_key or os.environ.get("OPENROUTER_API_KEY") or ""
+    if not uses_cli(model) and not resolved_api_key:
         console.print("[red]Error: OpenRouter API key required[/red]")
         console.print("Set via --api-key or OPENROUTER_API_KEY environment variable")
         console.print("Get your key at: https://openrouter.ai/keys")
@@ -252,6 +282,9 @@ def _main(
         console.print("No files to translate")
         raise typer.Exit(0)
 
+    # Built once so a backend that ran dry stays dropped across files.
+    translator = OpenRouterTranslator(resolved_api_key, model, effort)
+
     for input_file in files_to_translate:
         output_file = input_file.replace(".extracted.srt", ".et.srt")
         if ".et.srt" not in output_file:
@@ -263,7 +296,6 @@ def _main(
 
         print(f"\nProcessing: {Path(input_file).name}")
 
-        translator = OpenRouterTranslator(resolved_api_key, model)
         subtitles = translator.read_srt(input_file)
         subtitles = deduplicate_subtitles(subtitles)
 
@@ -278,9 +310,14 @@ def _main(
         for t, count in types.items():
             print(f"  {t}: {count} ({count / len(subtitles) * 100:.1f}%)")
 
-        translated = translator.translate_subtitles(
-            subtitles, chunk_size=chunk_size, max_workers=max_workers
-        )
+        try:
+            translated = translator.translate_subtitles(
+                subtitles, chunk_size=chunk_size, max_workers=max_workers
+            )
+        except QuotaExhausted as e:
+            console.print(f"\n[red]{e}[/red]")
+            console.print("Nothing written - top up or set OPENROUTER_API_KEY and re-run.")
+            raise typer.Exit(1) from e
 
         translator.write_srt(translated, output_file)
         print(f"✅ Saved to: {output_file}")
