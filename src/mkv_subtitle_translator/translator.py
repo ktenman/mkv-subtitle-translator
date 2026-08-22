@@ -9,16 +9,32 @@ from datetime import datetime
 from tqdm import tqdm
 
 from mkv_subtitle_translator.analyzer import SubtitleAnalyzer
-from mkv_subtitle_translator.client import OpenRouterClient
+from mkv_subtitle_translator.backends import DEFAULT_EFFORT, build_chain
 from mkv_subtitle_translator.linebreak import restore_line_break
-from mkv_subtitle_translator.models import DEFAULT_MODEL, Subtitle, SubtitleType, TranslationStats
+from mkv_subtitle_translator.models import (
+    DEFAULT_MODEL,
+    Subtitle,
+    SubtitleType,
+    TranslationStats,
+)
+
+# Openers mapped to the closers that count as a matching pair.
+_QUOTE_PAIRS = {'"': '"', "'": "'", "„": "“”", "“": "”", "«": "»"}
+
+
+def strip_wrapping_quotes(text: str) -> str:
+    """Drop quotes that wrap the whole line, keeping quotes inside it."""
+    text = text.strip()
+    if len(text) > 1 and text[-1] in _QUOTE_PAIRS.get(text[0], ""):
+        return text[1:-1].strip()
+    return text
 
 
 class OpenRouterTranslator:
-    """Subtitle translator using OpenRouter API"""
+    """Subtitle translator using the Codex/Claude CLIs or the OpenRouter API"""
 
-    def __init__(self, api_key: str, model: str = DEFAULT_MODEL):
-        self.client = OpenRouterClient(api_key, model)
+    def __init__(self, api_key: str, model: str = DEFAULT_MODEL, effort: str = DEFAULT_EFFORT):
+        self.client = build_chain(model, effort, api_key)
         self.analyzer = SubtitleAnalyzer()
         self.context_window_size = 5  # Increased for better context
         self.glossary = self._create_translation_glossary()
@@ -178,7 +194,7 @@ Preserve any formatting or emphasis from the original."""
                 )
 
                 # Clean up response (remove quotes if present)
-                translated_text = translated_text.strip("\"'")
+                translated_text = strip_wrapping_quotes(translated_text)
                 subtitle.translated_text = translated_text
 
                 # Update stats
@@ -263,7 +279,7 @@ Return each line as [number] Estonian translation.
                     match = re.match(r"\[(\d+)\]\s*(.*)", line)
                     if match:
                         idx = match.group(1)
-                        trans = match.group(2).strip()
+                        trans = strip_wrapping_quotes(match.group(2))
                         translations[idx] = trans
 
                 # Apply translations

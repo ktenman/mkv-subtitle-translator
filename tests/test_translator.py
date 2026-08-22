@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from mkv_subtitle_translator.models import Subtitle
-from mkv_subtitle_translator.translator import OpenRouterTranslator, deduplicate_subtitles
+from mkv_subtitle_translator.translator import (
+    OpenRouterTranslator,
+    deduplicate_subtitles,
+    strip_wrapping_quotes,
+)
 
 SAMPLE_SRT = """1
 00:00:01,000 --> 00:00:02,000
@@ -65,6 +69,20 @@ class TestWriteSrt:
         content = out.read_text(encoding="utf-8-sig")
         text_block = content.split("\n", 2)[2].rstrip("\n")
         assert text_block == "[uks kriuksub]"
+
+
+class TestStripWrappingQuotes:
+    def test_strips_estonian_quotes_codex_likes_to_add(self):
+        assert strip_wrapping_quotes("„Tere, kullake.“") == "Tere, kullake."
+
+    def test_strips_straight_quotes(self):
+        assert strip_wrapping_quotes('"Tere"') == "Tere"
+
+    def test_keeps_quotes_inside_the_line(self):
+        assert strip_wrapping_quotes('"Ma tulen," ütles ta.') == '"Ma tulen," ütles ta.'
+
+    def test_leaves_unquoted_text_alone(self):
+        assert strip_wrapping_quotes("Tere") == "Tere"
 
 
 class TestDeduplicateSubtitles:

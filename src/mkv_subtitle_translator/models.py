@@ -10,6 +10,44 @@ from enum import Enum
 
 SUBTITLE_MODELS = {
     # TIER 1: Premium (Best quality, higher cost)
+    "codex": {
+        "id": "gpt-5.6-sol",
+        "name": "GPT-5.6 Sol (Codex CLI)",
+        "cost_per_1m_input": 0.0,
+        "cost_per_1m_output": 0.0,
+        "strengths": ["best Estonian", "no API cost", "configurable reasoning effort"],
+        "tier": "premium",
+        "recommended_for": ["films", "drama", "everything"],
+        "supports_batch": True,
+        "max_context": 272_000,
+        "max_output": 128_000,
+        "via_codex": True,
+    },
+    "claude": {
+        "id": "opus",
+        "name": "Opus 5 (Claude Code CLI)",
+        "cost_per_1m_input": 0.0,
+        "cost_per_1m_output": 0.0,
+        "strengths": ["nuanced dialogue", "no API cost", "max reasoning effort"],
+        "tier": "premium",
+        "recommended_for": ["films", "drama", "complex dialogue"],
+        "supports_batch": True,
+        "max_context": 1_000_000,
+        "max_output": 64_000,
+        "via_claude": True,
+    },
+    "gpt-5.6-sol": {
+        "id": "openai/gpt-5.6-sol",
+        "name": "GPT-5.6 Sol",
+        "cost_per_1m_input": 2.00,
+        "cost_per_1m_output": 10.0,
+        "strengths": ["same model as codex", "best Estonian", "1M+ context"],
+        "tier": "premium",
+        "recommended_for": ["films", "drama", "everything"],
+        "supports_batch": True,
+        "max_context": 1_050_000,
+        "max_output": 128_000,
+    },
     "gpt-5.5": {
         "id": "openai/gpt-5.5",
         "name": "GPT-5.5",
@@ -185,8 +223,8 @@ SUBTITLE_MODELS = {
     },
 }
 
-# Default model - GPT-5.4 (best quality translations)
-DEFAULT_MODEL = "gpt-5.4"
+# Default model - Codex CLI (best Estonian, billed to the ChatGPT subscription)
+DEFAULT_MODEL = "codex"
 
 
 class SubtitleType(Enum):
