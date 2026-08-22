@@ -17,6 +17,7 @@ from rich.console import Console
 from rich.table import Table
 
 from mkv_subtitle_translator.backends import (
+    API_CHUNK_SIZE,
     DEFAULT_BATCH_SIZE,
     DEFAULT_EFFORT,
     REASONING_EFFORTS,
@@ -30,7 +31,6 @@ from mkv_subtitle_translator.translator import OpenRouterTranslator, deduplicate
 logger = logging.getLogger(__name__)
 
 GITHUB_REPO = "ktenman/mkv-subtitle-translator"
-API_CHUNK_SIZE = 50
 
 app = typer.Typer(
     name="mkv-subtitle-translator",
@@ -89,14 +89,6 @@ def _check_and_upgrade(current: str) -> None:
 def _validate_model(value: str) -> str:
     if value not in SUBTITLE_MODELS:
         raise typer.BadParameter(f"Unknown model '{value}'. Run --list-models to see options.")
-    return value
-
-
-def _validate_chunk_size(value: int | None) -> int | None:
-    # A non-positive size makes range() yield no batches at all, which would
-    # write the untranslated English out as if it were Estonian.
-    if value is not None and value < 1:
-        raise typer.BadParameter("Chunk size must be at least 1")
     return value
 
 
@@ -218,7 +210,8 @@ def _main(
         typer.Option(
             "--chunk-size",
             help=f"Chunk size (default: {DEFAULT_BATCH_SIZE} for CLIs, {API_CHUNK_SIZE} otherwise)",
-            callback=_validate_chunk_size,
+            # Below 1, range() yields no batches and the English gets written as Estonian.
+            min=1,
         ),
     ] = None,
     max_workers: Annotated[int, typer.Option("--max-workers", help="Max parallel workers")] = 8,
@@ -239,11 +232,8 @@ def _main(
         estimate_cost(estimate, model)
         raise typer.Exit(0)
 
-    cli_model = uses_cli(model)
-    resolved_chunk_size = chunk_size or (DEFAULT_BATCH_SIZE if cli_model else API_CHUNK_SIZE)
-
     resolved_api_key = api_key or os.environ.get("OPENROUTER_API_KEY") or ""
-    if not cli_model and not resolved_api_key:
+    if not uses_cli(model) and not resolved_api_key:
         console.print("[red]Error: OpenRouter API key required[/red]")
         console.print("Set via --api-key or OPENROUTER_API_KEY environment variable")
         console.print("Get your key at: https://openrouter.ai/keys")
@@ -322,7 +312,7 @@ def _main(
 
         try:
             translated = translator.translate_subtitles(
-                subtitles, chunk_size=resolved_chunk_size, max_workers=max_workers
+                subtitles, chunk_size=chunk_size, max_workers=max_workers
             )
         except QuotaExhausted as e:
             console.print(f"\n[red]{e}[/red]")

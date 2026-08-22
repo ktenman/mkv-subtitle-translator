@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from mkv_subtitle_translator.backends import QuotaExhausted
+from mkv_subtitle_translator.backends import (
+    API_CHUNK_SIZE,
+    DEFAULT_BATCH_SIZE,
+    QuotaExhausted,
+)
 from mkv_subtitle_translator.models import Subtitle
 from mkv_subtitle_translator.translator import (
     OpenRouterTranslator,
@@ -133,6 +137,27 @@ class TestBatchTranslate:
         )
 
         with pytest.raises(QuotaExhausted):
-            translator.translate_subtitles([sub], chunk_size=200)
+            translator.translate_subtitles([sub])
 
         assert sub.translated_text is None
+
+
+class TestChunkSizeDefault:
+    @pytest.mark.parametrize(
+        ("model", "expected"), [("codex", DEFAULT_BATCH_SIZE), ("gpt-5.4", API_CHUNK_SIZE)]
+    )
+    def test_cli_backends_batch_bigger_than_the_api(self, mocker, model, expected):
+        translator = OpenRouterTranslator("dummy-key", model)
+        batch = mocker.patch.object(translator, "_batch_translate")
+
+        translator.translate_subtitles([Subtitle(index="1", timestamp="t1", text="Hi")])
+
+        assert batch.call_args.kwargs["batch_size"] == expected
+
+    def test_explicit_chunk_size_wins(self, mocker):
+        translator = OpenRouterTranslator("", "codex")
+        batch = mocker.patch.object(translator, "_batch_translate")
+
+        translator.translate_subtitles([Subtitle(index="1", timestamp="t1", text="Hi")], 25)
+
+        assert batch.call_args.kwargs["batch_size"] == 25

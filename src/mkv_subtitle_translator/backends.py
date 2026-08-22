@@ -15,6 +15,7 @@ DEFAULT_EFFORT = "high"
 # One CLI call costs thousands of tokens of agent scaffolding regardless of
 # payload, and takes 10s+, so translate in far bigger batches than the API path.
 DEFAULT_BATCH_SIZE = 200
+API_CHUNK_SIZE = 50
 
 CLAUDE_MODEL = "claude"
 CLAUDE_EFFORT = "max"
