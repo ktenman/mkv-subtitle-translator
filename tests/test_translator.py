@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+
+from mkv_subtitle_translator.backends import QuotaExhausted
 from mkv_subtitle_translator.models import Subtitle
 from mkv_subtitle_translator.translator import (
     OpenRouterTranslator,
@@ -119,3 +122,17 @@ class TestTranslateChunk:
         assert sub.translated_text == "Tere"
         translate_mock.assert_called_once()
         assert translator.translation_cache["Hi"] == "Tere"
+
+
+class TestBatchTranslate:
+    def test_exhausted_chain_raises_instead_of_writing_english(self, mocker):
+        translator = OpenRouterTranslator("", "codex")
+        sub = Subtitle(index="1", timestamp="t1", text="Hi")
+        mocker.patch.object(
+            translator.client, "translate", side_effect=QuotaExhausted("all backends dry")
+        )
+
+        with pytest.raises(QuotaExhausted):
+            translator.translate_subtitles([sub], chunk_size=200)
+
+        assert sub.translated_text is None

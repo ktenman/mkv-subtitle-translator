@@ -9,7 +9,7 @@ from datetime import datetime
 from tqdm import tqdm
 
 from mkv_subtitle_translator.analyzer import SubtitleAnalyzer
-from mkv_subtitle_translator.backends import DEFAULT_EFFORT, build_chain
+from mkv_subtitle_translator.backends import DEFAULT_EFFORT, QuotaExhausted, build_chain
 from mkv_subtitle_translator.linebreak import restore_line_break
 from mkv_subtitle_translator.models import (
     DEFAULT_MODEL,
@@ -302,6 +302,10 @@ Return each line as [number] Estonian translation.
 
                 pbar.update(1)
 
+            except QuotaExhausted:
+                # Every backend is dry - keep going and we'd write English as Estonian.
+                pbar.close()
+                raise
             except Exception as e:
                 print(f"\n  Batch {batch_idx + 1} error: {e}")
                 for sub in batch:

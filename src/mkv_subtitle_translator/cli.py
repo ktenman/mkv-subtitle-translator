@@ -16,7 +16,13 @@ from packaging.version import Version
 from rich.console import Console
 from rich.table import Table
 
-from mkv_subtitle_translator.backends import DEFAULT_BATCH_SIZE, DEFAULT_EFFORT, REASONING_EFFORTS
+from mkv_subtitle_translator.backends import (
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_EFFORT,
+    REASONING_EFFORTS,
+    QuotaExhausted,
+    uses_cli,
+)
 from mkv_subtitle_translator.mkv import extract_best_subtitle_from_mkv, merge_subtitles_into_mkv
 from mkv_subtitle_translator.models import DEFAULT_MODEL, SUBTITLE_MODELS
 from mkv_subtitle_translator.translator import OpenRouterTranslator, deduplicate_subtitles
@@ -224,12 +230,11 @@ def _main(
         estimate_cost(estimate, model)
         raise typer.Exit(0)
 
-    config = SUBTITLE_MODELS[model]
-    uses_cli = config.get("via_codex", False) or config.get("via_claude", False)
-    resolved_chunk_size = chunk_size or (DEFAULT_BATCH_SIZE if uses_cli else API_CHUNK_SIZE)
+    cli_model = uses_cli(model)
+    resolved_chunk_size = chunk_size or (DEFAULT_BATCH_SIZE if cli_model else API_CHUNK_SIZE)
 
     resolved_api_key = api_key or os.environ.get("OPENROUTER_API_KEY") or ""
-    if not uses_cli and not resolved_api_key:
+    if not cli_model and not resolved_api_key:
         console.print("[red]Error: OpenRouter API key required[/red]")
         console.print("Set via --api-key or OPENROUTER_API_KEY environment variable")
         console.print("Get your key at: https://openrouter.ai/keys")
@@ -278,6 +283,9 @@ def _main(
         console.print("No files to translate")
         raise typer.Exit(0)
 
+    # Built once so a backend that ran dry stays dropped across files.
+    translator = OpenRouterTranslator(resolved_api_key, model, effort)
+
     for input_file in files_to_translate:
         output_file = input_file.replace(".extracted.srt", ".et.srt")
         if ".et.srt" not in output_file:
@@ -289,7 +297,6 @@ def _main(
 
         print(f"\nProcessing: {Path(input_file).name}")
 
-        translator = OpenRouterTranslator(resolved_api_key, model, effort)
         subtitles = translator.read_srt(input_file)
         subtitles = deduplicate_subtitles(subtitles)
 
@@ -304,9 +311,14 @@ def _main(
         for t, count in types.items():
             print(f"  {t}: {count} ({count / len(subtitles) * 100:.1f}%)")
 
-        translated = translator.translate_subtitles(
-            subtitles, chunk_size=resolved_chunk_size, max_workers=max_workers
-        )
+        try:
+            translated = translator.translate_subtitles(
+                subtitles, chunk_size=resolved_chunk_size, max_workers=max_workers
+            )
+        except QuotaExhausted as e:
+            console.print(f"\n[red]{e}[/red]")
+            console.print("Nothing written - top up or set OPENROUTER_API_KEY and re-run.")
+            raise typer.Exit(1) from e
 
         translator.write_srt(translated, output_file)
         print(f"✅ Saved to: {output_file}")

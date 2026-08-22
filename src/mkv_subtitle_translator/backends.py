@@ -19,6 +19,7 @@ DEFAULT_BATCH_SIZE = 200
 CLAUDE_MODEL = "claude"
 CLAUDE_EFFORT = "max"
 API_FALLBACK_MODEL = "gpt-5.6-sol"
+TIMEOUT = 1800.0
 
 CODEX_INSTALL_HINT = "codex CLI not found on PATH. Install: npm install -g @openai/codex"
 CLAUDE_INSTALL_HINT = "claude CLI not found on PATH. See https://claude.com/claude-code"
@@ -43,16 +44,11 @@ def _error(name: str, detail: str) -> Exception:
 
 
 def _run(
-    cmd: list[str], prompt: str, timeout: float, workdir: str, install_hint: str
+    cmd: list[str], prompt: str, workdir: str, install_hint: str
 ) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(
-            cmd,
-            input=prompt,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=workdir,
+            cmd, input=prompt, capture_output=True, text=True, timeout=TIMEOUT, cwd=workdir
         )
     except FileNotFoundError as exc:
         raise RuntimeError(install_hint) from exc
@@ -75,17 +71,10 @@ class CodexClient:
     reported as zero. Same surface as OpenRouterClient.
     """
 
-    def __init__(
-        self,
-        model: str = DEFAULT_MODEL,
-        effort: str = DEFAULT_EFFORT,
-        timeout: float = 1800.0,
-    ):
-        self.model_key = model
-        self.model_config = SUBTITLE_MODELS.get(model, SUBTITLE_MODELS[DEFAULT_MODEL])
+    def __init__(self, model: str = DEFAULT_MODEL, effort: str = DEFAULT_EFFORT):
+        self.model_config = SUBTITLE_MODELS[model]
         self.model_id = self.model_config["id"]
         self.effort = effort
-        self.timeout = timeout
 
     def translate(
         self, system_prompt: str, user_prompt: str, max_tokens: int = 500
@@ -116,9 +105,7 @@ class CodexClient:
                 str(last_message),
                 "-",
             ]
-            result = _run(
-                cmd, f"{system_prompt}\n\n{user_prompt}", self.timeout, workdir, CODEX_INSTALL_HINT
-            )
+            result = _run(cmd, f"{system_prompt}\n\n{user_prompt}", workdir, CODEX_INSTALL_HINT)
 
             if result.returncode != 0:
                 raise _error("codex", f"{result.stderr}\n{result.stdout}")
@@ -145,17 +132,7 @@ class ClaudeClient:
     overhead from ~34k tokens to ~6.5k.
     """
 
-    def __init__(
-        self,
-        model: str = CLAUDE_MODEL,
-        effort: str = CLAUDE_EFFORT,
-        timeout: float = 1800.0,
-    ):
-        self.model_key = model
-        self.model_config = SUBTITLE_MODELS.get(model, SUBTITLE_MODELS[CLAUDE_MODEL])
-        self.model_id = self.model_config["id"]
-        self.effort = effort
-        self.timeout = timeout
+    model_config = SUBTITLE_MODELS[CLAUDE_MODEL]
 
     def translate(
         self, system_prompt: str, user_prompt: str, max_tokens: int = 500
@@ -166,9 +143,9 @@ class ClaudeClient:
                 "claude",
                 "-p",
                 "--model",
-                self.model_id,
+                self.model_config["id"],
                 "--effort",
-                self.effort,
+                CLAUDE_EFFORT,
                 "--output-format",
                 "json",
                 "--strict-mcp-config",
@@ -179,18 +156,17 @@ class ClaudeClient:
                 "--system-prompt",
                 system_prompt,
             ]
-            result = _run(cmd, user_prompt, self.timeout, workdir, CLAUDE_INSTALL_HINT)
+            result = _run(cmd, user_prompt, workdir, CLAUDE_INSTALL_HINT)
 
         detail = f"{result.stderr}\n{result.stdout}"
         if result.returncode != 0:
             raise _error("claude", detail)
 
         try:
-            events = json.loads(result.stdout)
-        except json.JSONDecodeError as exc:
+            last = json.loads(result.stdout)[-1]
+        except (json.JSONDecodeError, IndexError) as exc:
             raise _error("claude", detail) from exc
 
-        last = events[-1] if isinstance(events, list) else events
         if last.get("is_error"):
             raise _error("claude", str(last.get("result") or detail))
 
@@ -214,46 +190,43 @@ class FallbackClient:
 
     def __init__(self, clients: list):
         self.clients = list(clients)
-        self.index = 0
-
-    @property
-    def active(self):
-        return self.clients[self.index]
 
     @property
     def model_config(self) -> dict:
-        return self.active.model_config
+        return self.clients[0].model_config
 
     def translate(self, *args, **kwargs) -> tuple[str, int, int]:
         while True:
             try:
-                return self.active.translate(*args, **kwargs)
+                return self.clients[0].translate(*args, **kwargs)
             except QuotaExhausted:
-                if self.index + 1 >= len(self.clients):
+                if len(self.clients) == 1:
                     raise
-                self.index += 1
+                self.clients.pop(0)
                 print(f"\nOut of credits - switching to {self.model_config['name']}")
 
     def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
-        return self.active.estimate_cost(input_tokens, output_tokens)
+        return self.clients[0].estimate_cost(input_tokens, output_tokens)
 
 
-def build_chain(
-    model: str = DEFAULT_MODEL, effort: str = DEFAULT_EFFORT, api_key: str = ""
-) -> object:
+def uses_cli(model: str) -> bool:
+    """True when the model translates through a local CLI instead of the API."""
+    return "backend" in SUBTITLE_MODELS[model]
+
+
+def build_chain(model: str = DEFAULT_MODEL, effort: str = DEFAULT_EFFORT, api_key: str = ""):
     """Codex -> Claude Code -> OpenRouter, entering at the requested backend.
 
     Each step takes over only once the one before it runs out of credits.
     OpenRouter is only reachable when an API key is available.
     """
-    config = SUBTITLE_MODELS.get(model, SUBTITLE_MODELS[DEFAULT_MODEL])
-    if not (config.get("via_codex") or config.get("via_claude")):
+    if not uses_cli(model):
         return OpenRouterClient(api_key, model)
 
     chain = []
-    if config.get("via_codex"):
+    if SUBTITLE_MODELS[model]["backend"] == "codex":
         chain.append(CodexClient(model, effort))
-    chain.append(ClaudeClient(CLAUDE_MODEL, CLAUDE_EFFORT))
+    chain.append(ClaudeClient())
     if api_key:
         chain.append(OpenRouterClient(api_key, API_FALLBACK_MODEL))
     return FallbackClient(chain)

@@ -21,7 +21,7 @@ SUBTITLE_MODELS = {
         "supports_batch": True,
         "max_context": 272_000,
         "max_output": 128_000,
-        "via_codex": True,
+        "backend": "codex",
     },
     "claude": {
         "id": "opus",
@@ -34,7 +34,7 @@ SUBTITLE_MODELS = {
         "supports_batch": True,
         "max_context": 1_000_000,
         "max_output": 64_000,
-        "via_claude": True,
+        "backend": "claude",
     },
     "gpt-5.6-sol": {
         "id": "openai/gpt-5.6-sol",

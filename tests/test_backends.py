@@ -11,7 +11,6 @@ from mkv_subtitle_translator.backends import (
     CodexClient,
     FallbackClient,
     QuotaExhausted,
-    _strip_code_fence,
     build_chain,
 )
 
@@ -20,19 +19,18 @@ def _fake_run(reply: str = "Tere", returncode: int = 0, stderr: str = ""):
     """Stand in for codex exec: write the reply to the -o file it was given."""
 
     def run(cmd, **kwargs):
-        if reply is not None:
-            Path(cmd[cmd.index("-o") + 1]).write_text(reply, encoding="utf-8")
+        Path(cmd[cmd.index("-o") + 1]).write_text(reply, encoding="utf-8")
         return subprocess.CompletedProcess(cmd, returncode, "", stderr)
 
     return run
 
 
-def _fake_claude_run(result: str = "Tere", returncode: int = 0, is_error: bool = False):
+def _fake_claude_run(result: str = "Tere", is_error: bool = False):
     """Stand in for claude -p --output-format json."""
     stdout = json.dumps([{"type": "result", "is_error": is_error, "result": result}])
 
     def run(cmd, **kwargs):
-        return subprocess.CompletedProcess(cmd, returncode, stdout, "")
+        return subprocess.CompletedProcess(cmd, 0, stdout, "")
 
     return run
 
@@ -59,7 +57,7 @@ class TestTranslate:
     def test_strips_code_fence_from_reply(self, mocker):
         mocker.patch(
             "mkv_subtitle_translator.backends.subprocess.run",
-            side_effect=_fake_run("```\n[1] Tere\n```"),
+            side_effect=_fake_run("```text\n[1] Tere\n```"),
         )
 
         text, _, _ = CodexClient("codex").translate("system", "user")
@@ -213,11 +211,3 @@ class TestEstimateCost:
     def test_subscription_usage_is_free(self):
         assert CodexClient("codex").estimate_cost(1_000_000, 1_000_000) == 0.0
         assert ClaudeClient().estimate_cost(1_000_000, 1_000_000) == 0.0
-
-
-class TestStripCodeFence:
-    def test_leaves_plain_text_alone(self):
-        assert _strip_code_fence("[1] Tere") == "[1] Tere"
-
-    def test_drops_language_tagged_fence(self):
-        assert _strip_code_fence("```text\n[1] Tere\n```") == "[1] Tere"
