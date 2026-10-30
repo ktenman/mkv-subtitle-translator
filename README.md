@@ -2,9 +2,9 @@
 
 Translate SRT subtitles to Estonian through the Codex CLI, the Claude Code CLI, or OpenRouter (200+ models), with automatic MKV subtitle extraction and merging.
 
-By default it translates with GPT-5.6 Sol through the local `codex` CLI, which bills to your ChatGPT subscription instead of a paid API. When that runs out of credits it switches automatically to Opus 5 through the `claude` CLI at max reasoning effort, and only then — if an OpenRouter API key is available — to the paid API. OpenRouter models can also be selected directly with `--model`.
+By default it translates with GPT-6 Astra at max reasoning effort through the local `codex` CLI, using your ChatGPT subscription allowance and credits. When that runs out of credits it switches automatically to Opus 5 through the `claude` CLI at max reasoning effort, and only then — if an OpenRouter API key is available — to the paid API. OpenRouter models can also be selected directly with `--model`.
 
-Supports multi-model translation (GPT-5.x, Claude, Gemini, and budget models), context-aware terms of endearment, automatic subtitle extraction from MKV files, smart subtitle selection (prefers non-SDH English), automatic merging of translated subtitles back into the MKV, retry logic with exponential backoff, and cost tracking/estimation.
+Supports multi-model translation (GPT-6 Astra, GPT-5.x, Claude, Gemini, and budget models), context-aware terms of endearment, automatic subtitle extraction from MKV files, smart subtitle selection (prefers non-SDH English), automatic merging of translated subtitles back into the MKV, retry logic with exponential backoff, and cost tracking/estimation.
 
 ## Installation
 
@@ -17,14 +17,14 @@ Requires `ffmpeg`/`ffprobe` on `PATH` for MKV extraction and merging, and `codex
 ## Usage
 
 ```bash
-# Translate every .mkv in the current directory with the default model (codex)
+# Translate every .mkv in the current directory with GPT-6 Astra through Codex
 mkv-subtitle-translator
 
 # Translate a specific file
 mkv-subtitle-translator -f episode.mkv
 
-# Crank reasoning effort - free on the subscription, just slower
-mkv-subtitle-translator -f episode.mkv --effort max
+# Use less reasoning effort for faster translations (default: max)
+mkv-subtitle-translator -f episode.mkv --effort high
 
 # Start on the Claude Code CLI instead of codex
 mkv-subtitle-translator -f episode.mkv --model claude
@@ -44,6 +44,8 @@ mkv-subtitle-translator -f episode.mkv --force
 
 The `codex` and `claude` models need no API key. Every other model requires an OpenRouter API key, via `--api-key` or the `OPENROUTER_API_KEY` environment variable. Get one at https://openrouter.ai/keys. Setting a key also unlocks the last step of the fallback chain.
 
+The `codex` model explicitly selects `gpt-6-astra` at max reasoning effort, regardless of your global Codex configuration. Use `--effort` to override the reasoning effort for a run.
+
 ## Options
 
 | Option | Description |
@@ -52,7 +54,7 @@ The `codex` and `claude` models need no API key. Every other model requires an O
 | `-f, --file` | Translate a specific `.srt` or `.mkv` file |
 | `--api-key` | OpenRouter API key (or set `OPENROUTER_API_KEY`); not needed for `codex`/`claude` |
 | `--model` | Model to use (default: `codex`); see `--list-models` |
-| `--effort` | Codex reasoning effort: `low`, `medium`, `high`, `xhigh`, `max`, `ultra` (default: `high`) |
+| `--effort` | Codex reasoning effort: `low`, `medium`, `high`, `xhigh`, `max`, `ultra` (default: `max`) |
 | `--list-models` | List available models with pricing and tier |
 | `--estimate PATH` | Estimate translation cost for a file, no translation performed |
 | `--no-merge` | Do not merge translated subtitles back into the MKV |

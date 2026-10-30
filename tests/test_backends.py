@@ -42,16 +42,19 @@ class TestTranslate:
 
         assert client.translate("system", "user") == ("Tere", 0, 0)
 
-    def test_passes_model_and_effort_to_codex(self, mocker):
+    @pytest.mark.parametrize(
+        ("kwargs", "expected_effort"), [({}, "max"), ({"effort": "high"}, "high")]
+    )
+    def test_passes_astra_and_effort_to_codex(self, mocker, kwargs, expected_effort):
         run = mocker.patch(
             "mkv_subtitle_translator.backends.subprocess.run", side_effect=_fake_run()
         )
-        CodexClient("codex", effort="max").translate("system", "user")
+        CodexClient(**kwargs).translate("system", "user")
 
         cmd = run.call_args.args[0]
         assert cmd[:2] == ["codex", "exec"]
-        assert cmd[cmd.index("-m") + 1] == "gpt-5.6-sol"
-        assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=max"
+        assert cmd[cmd.index("-m") + 1] == "gpt-6-astra"
+        assert cmd[cmd.index("-c") + 1] == f"model_reasoning_effort={expected_effort}"
         assert run.call_args.kwargs["input"] == "system\n\nuser"
 
     def test_strips_code_fence_from_reply(self, mocker):

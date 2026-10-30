@@ -10,7 +10,7 @@ from mkv_subtitle_translator.client import OpenRouterClient
 from mkv_subtitle_translator.models import DEFAULT_MODEL, SUBTITLE_MODELS
 
 REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
-DEFAULT_EFFORT = "high"
+DEFAULT_EFFORT = "max"
 
 # One CLI call costs thousands of tokens of agent scaffolding regardless of
 # payload, and takes 10s+, so translate in far bigger batches than the API path.

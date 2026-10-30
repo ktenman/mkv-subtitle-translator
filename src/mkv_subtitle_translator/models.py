@@ -11,8 +11,8 @@ from enum import Enum
 SUBTITLE_MODELS = {
     # TIER 1: Premium (Best quality, higher cost)
     "codex": {
-        "id": "gpt-5.6-sol",
-        "name": "GPT-5.6 Sol (Codex CLI)",
+        "id": "gpt-6-astra",
+        "name": "GPT-6 Astra (Codex CLI)",
         "cost_per_1m_input": 0.0,
         "cost_per_1m_output": 0.0,
         "strengths": ["best Estonian", "no API cost", "configurable reasoning effort"],
@@ -41,7 +41,7 @@ SUBTITLE_MODELS = {
         "name": "GPT-5.6 Sol",
         "cost_per_1m_input": 2.00,
         "cost_per_1m_output": 10.0,
-        "strengths": ["same model as codex", "best Estonian", "1M+ context"],
+        "strengths": ["best Estonian", "1M+ context"],
         "tier": "premium",
         "recommended_for": ["films", "drama", "everything"],
         "supports_batch": True,
