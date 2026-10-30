@@ -24,6 +24,7 @@ from mkv_subtitle_translator.models import (
     SubtitleType,
     TranslationStats,
 )
+from mkv_subtitle_translator.progress import BatchProgress
 
 # Openers mapped to the closers that count as a matching pair.
 _QUOTE_PAIRS = {'"': '"', "'": "'", "„": "“”", "“": "”", "«": "»"}
@@ -239,13 +240,32 @@ Preserve any formatting or emphasis from the original."""
         print(f"\n{'=' * 60}")
         print(f"Model: {model_info['name']} ({model_info['tier']}) - BATCH MODE")
         print(f"Translating {len(subtitles)} subtitles in batches of {batch_size}")
-        print(f"{'=' * 60}")
+        print(f"{'=' * 60}", flush=True)
 
         batches = [subtitles[i : i + batch_size] for i in range(0, len(subtitles), batch_size)]
 
-        pbar = tqdm(total=len(batches), desc="Batch translating")
+        with BatchProgress(total=len(subtitles), batches=len(batches)) as progress:
+            self._translate_batches(batches, max_output, progress)
 
+        self.stats.end_time = datetime.now()
+        self.stats.estimated_cost = self.client.estimate_cost(
+            self.stats.input_tokens, self.stats.output_tokens
+        )
+        self._print_stats()
+        return subtitles
+
+    def _translate_batches(
+        self, batches: list[list[Subtitle]], max_output: int, progress: BatchProgress
+    ) -> None:
         for batch_idx, batch in enumerate(batches):
+            progress.start_batch(
+                batch_idx + 1,
+                (batch[0].index, batch[-1].index),
+                len(batch),
+                self.client.model_config["name"],
+            )
+            completed_before = self.stats.completed
+            failed_before = self.stats.failed
             try:
                 # Build numbered list of subtitles
                 lines = []
@@ -278,7 +298,10 @@ Return each line as [number] Estonian translation.
                 est_output_tokens = min(len(batch) * 80, max_output)
 
                 translated_text, input_tokens, output_tokens = self.client.translate(
-                    system_prompt, user_prompt, max_tokens=est_output_tokens
+                    system_prompt,
+                    user_prompt,
+                    max_tokens=est_output_tokens,
+                    progress=progress.report,
                 )
 
                 # Parse response - match [number] translation lines
@@ -294,11 +317,9 @@ Return each line as [number] Estonian translation.
                         translations[idx] = trans
 
                 # Apply translations
-                matched = 0
                 for sub in batch:
-                    if sub.index in translations:
+                    if translations.get(sub.index):
                         sub.translated_text = translations[sub.index]
-                        matched += 1
                         self.stats.completed += 1
                     else:
                         # Fallback: keep original
@@ -308,30 +329,18 @@ Return each line as [number] Estonian translation.
                 self.stats.input_tokens += input_tokens
                 self.stats.output_tokens += output_tokens
 
-                if matched < len(batch):
-                    print(f"\n  Batch {batch_idx + 1}: {matched}/{len(batch)} matched")
-
-                pbar.update(1)
-
             except QuotaExhausted:
                 # Every backend is dry - keep going and we'd write English as Estonian.
-                pbar.close()
                 raise
             except Exception as e:
-                print(f"\n  Batch {batch_idx + 1} error: {e}")
+                progress.report(f"Error: {e}")
                 for sub in batch:
                     if not sub.translated_text:
                         sub.translated_text = sub.text
                         self.stats.failed += 1
-                pbar.update(1)
-
-        pbar.close()
-        self.stats.end_time = datetime.now()
-        self.stats.estimated_cost = self.client.estimate_cost(
-            self.stats.input_tokens, self.stats.output_tokens
-        )
-        self._print_stats()
-        return subtitles
+            progress.finish_batch(
+                self.stats.completed - completed_before, self.stats.failed - failed_before
+            )
 
     def translate_subtitles(
         self, subtitles: list[Subtitle], chunk_size: int | None = None, max_workers: int = 8

@@ -129,6 +129,69 @@ class TestTranslateChunk:
 
 
 class TestBatchTranslate:
+    def test_announces_batch_before_waiting_for_translation(self, mocker, capsys):
+        translator = OpenRouterTranslator("", "codex")
+        subtitles = [Subtitle(index=str(i), timestamp="t", text="Hi") for i in (10, 20, 30)]
+        snapshots = []
+
+        def translate(*args, **kwargs):
+            snapshots.append(capsys.readouterr().err)
+            return "[10] Tere\n[20] Tere\n[30] Tere", 0, 0
+
+        mocker.patch.object(translator.client, "translate", side_effect=translate)
+        translator.translate_subtitles(subtitles, chunk_size=2)
+
+        assert "Batch 1/2" in snapshots[0]
+        assert "10-20" in snapshots[0]
+        assert "2 subtitles" in snapshots[0]
+        assert "GPT-6 Astra" in snapshots[0]
+        assert "Batch 2/2" in snapshots[1]
+        assert "30-30" in snapshots[1]
+        assert all(sub.translated_text == "Tere" for sub in subtitles)
+
+    def test_reports_partial_batches_without_claiming_all_translated(self, mocker, capsys):
+        translator = OpenRouterTranslator("", "codex")
+        subtitles = [Subtitle(index=str(i), timestamp="t", text="Hi") for i in (1, 2)]
+        mocker.patch.object(translator.client, "translate", return_value=("[1] Tere", 0, 0))
+
+        translator.translate_subtitles(subtitles)
+
+        output = capsys.readouterr().err
+        assert "2/2 processed" in output
+        assert "1 translated, 1 failed" in output
+        assert translator.stats.completed == 1
+        assert translator.stats.failed == 1
+        assert subtitles[1].translated_text == "Hi"
+
+    def test_reports_batch_error_and_continues(self, mocker, capsys):
+        translator = OpenRouterTranslator("", "codex")
+        subtitles = [Subtitle(index=str(i), timestamp="t", text="Hi") for i in (1, 2)]
+        mocker.patch.object(
+            translator.client,
+            "translate",
+            side_effect=[RuntimeError("offline"), ("[2] Tere", 0, 0)],
+        )
+
+        translator.translate_subtitles(subtitles, chunk_size=1)
+
+        output = capsys.readouterr().err
+        assert "Batch 1/2" in output and "offline" in output
+        assert "2/2 processed" in output
+        assert "1 translated, 1 failed" in output
+        assert subtitles[1].translated_text == "Tere"
+
+    def test_empty_translation_is_reported_as_failed(self, mocker, capsys):
+        translator = OpenRouterTranslator("", "codex")
+        sub = Subtitle(index="1", timestamp="t", text="Hi")
+        mocker.patch.object(translator.client, "translate", return_value=('[1] ""', 0, 0))
+
+        translator.translate_subtitles([sub])
+
+        assert "0 translated, 1 failed" in capsys.readouterr().err
+        assert sub.translated_text == "Hi"
+        assert translator.stats.completed == 0
+        assert translator.stats.failed == 1
+
     def test_exhausted_chain_raises_instead_of_writing_english(self, mocker):
         translator = OpenRouterTranslator("", "codex")
         sub = Subtitle(index="1", timestamp="t1", text="Hi")
