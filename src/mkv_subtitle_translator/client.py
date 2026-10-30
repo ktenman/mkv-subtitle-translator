@@ -5,6 +5,7 @@ import time
 import httpx
 
 from mkv_subtitle_translator.models import DEFAULT_MODEL, SUBTITLE_MODELS, TranslationStats
+from mkv_subtitle_translator.progress import ProgressCallback
 
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -27,7 +28,14 @@ class OpenRouterClient:
         self.timeout = timeout
         self.stats = TranslationStats()
 
-    def _make_request(self, messages: list[dict], temperature: float = 0.3, **kwargs) -> dict:
+    def _make_request(
+        self,
+        messages: list[dict],
+        temperature: float = 0.3,
+        *,
+        progress: ProgressCallback | None = None,
+        **kwargs,
+    ) -> dict:
         """Make API request with retry logic"""
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -47,6 +55,13 @@ class OpenRouterClient:
 
         last_error = None
         for attempt in range(self.max_retries):
+            if progress:
+                progress(
+                    f"Waiting for OpenRouter response (attempt {attempt + 1}/{self.max_retries}; "
+                    f"timeout {self.timeout:g}s)"
+                )
+            wait_time = 2**attempt
+            retry_reason = "Request failed"
             try:
                 with httpx.Client(timeout=self.timeout) as client:
                     response = client.post(OPENROUTER_API_URL, headers=headers, json=payload)
@@ -54,33 +69,33 @@ class OpenRouterClient:
                     if response.status_code == 200:
                         return response.json()
                     elif response.status_code == 429:
-                        # Rate limited - exponential backoff
-                        wait_time = (2**attempt) * 2
-                        time.sleep(wait_time)
-                        continue
+                        last_error = retry_reason = "Rate limited (HTTP 429)"
+                        wait_time *= 2
                     elif response.status_code >= 500:
-                        # Server error - retry
-                        wait_time = (2**attempt) * 1
-                        time.sleep(wait_time)
-                        continue
+                        last_error = retry_reason = f"Server error (HTTP {response.status_code})"
                     else:
                         error_msg = response.text
                         raise Exception(f"API error {response.status_code}: {error_msg}")
 
             except httpx.TimeoutException:
-                last_error = "Request timeout"
-                wait_time = (2**attempt) * 1
-                time.sleep(wait_time)
+                last_error = retry_reason = "Request timeout"
             except Exception as e:
                 last_error = str(e)
-                if attempt < self.max_retries - 1:
-                    wait_time = (2**attempt) * 1
-                    time.sleep(wait_time)
+
+            if attempt < self.max_retries - 1:
+                if progress:
+                    progress(f"{retry_reason}; retrying in {wait_time}s")
+                time.sleep(wait_time)
 
         raise Exception(f"Failed after {self.max_retries} retries: {last_error}")
 
     def translate(
-        self, system_prompt: str, user_prompt: str, max_tokens: int = 500
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int = 500,
+        *,
+        progress: ProgressCallback | None = None,
     ) -> tuple[str, int, int]:
         """Translate text and return (translation, input_tokens, output_tokens)"""
         messages = [
@@ -88,7 +103,7 @@ class OpenRouterClient:
             {"role": "user", "content": user_prompt},
         ]
 
-        response = self._make_request(messages, max_tokens=max_tokens)
+        response = self._make_request(messages, max_tokens=max_tokens, progress=progress)
 
         translated_text = response["choices"][0]["message"]["content"].strip()
 

@@ -36,6 +36,33 @@ def _fake_claude_run(result: str = "Tere", is_error: bool = False):
 
 
 class TestTranslate:
+    def test_reports_waiting_and_timeout_before_launching_codex(self, mocker):
+        messages = []
+        at_launch = []
+
+        def run(cmd, **kwargs):
+            at_launch.extend(messages)
+            return _fake_run()(cmd, **kwargs)
+
+        mocker.patch("mkv_subtitle_translator.backends.subprocess.run", side_effect=run)
+        result = CodexClient(effort="high").translate("system", "user", progress=messages.append)
+
+        assert result == ("Tere", 0, 0)
+        assert len(at_launch) == 1
+        assert "Waiting for Codex" in at_launch[0]
+        assert "high" in at_launch[0] and "30m" in at_launch[0]
+
+    def test_timeout_message_is_concise_and_omits_the_prompt(self, mocker):
+        mocker.patch(
+            "mkv_subtitle_translator.backends.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(["codex", "private prompt"], 1800),
+        )
+
+        with pytest.raises(RuntimeError, match="codex timed out after 30m") as exc:
+            CodexClient().translate("system", "user")
+
+        assert "private prompt" not in str(exc.value)
+
     def test_returns_last_message_with_zero_token_counts(self, mocker):
         mocker.patch("mkv_subtitle_translator.backends.subprocess.run", side_effect=_fake_run())
         client = CodexClient("codex")
@@ -139,6 +166,23 @@ class TestTranslate:
 
 
 class TestClaudeTranslate:
+    def test_reports_waiting_before_launching_claude(self, mocker):
+        messages = []
+        at_launch = []
+
+        def run(cmd, **kwargs):
+            at_launch.extend(messages)
+            return _fake_claude_run()(cmd, **kwargs)
+
+        mocker.patch("mkv_subtitle_translator.backends.subprocess.run", side_effect=run)
+        assert ClaudeClient().translate("system", "user", progress=messages.append) == (
+            "Tere",
+            0,
+            0,
+        )
+        assert len(at_launch) == 1
+        assert "Waiting for Claude" in at_launch[0] and "30m" in at_launch[0]
+
     def test_returns_result_field(self, mocker):
         mocker.patch(
             "mkv_subtitle_translator.backends.subprocess.run", side_effect=_fake_claude_run()
@@ -195,6 +239,23 @@ class _StubClient:
 
 
 class TestFallbackClient:
+    def test_reports_switch_and_new_backend_wait_in_order(self, mocker):
+        messages = []
+
+        def run(cmd, **kwargs):
+            if cmd[0] == "codex":
+                return _fake_run(returncode=1, stderr="UsageLimitReached")(cmd, **kwargs)
+            return _fake_claude_run()(cmd, **kwargs)
+
+        mocker.patch("mkv_subtitle_translator.backends.subprocess.run", side_effect=run)
+        chain = FallbackClient([CodexClient(), ClaudeClient()])
+
+        assert chain.translate("s", "u", progress=messages.append) == ("Tere", 0, 0)
+        assert len(messages) == 3
+        assert "Waiting for Codex" in messages[0]
+        assert "switching to" in messages[1] and "Claude" in messages[1]
+        assert "Waiting for Claude" in messages[2]
+
     def test_uses_first_client_while_it_has_credits(self):
         first, second = _StubClient("first", "Tere"), _StubClient("second", "Tere teine")
         assert FallbackClient([first, second]).translate("s", "u") == ("Tere", 0, 0)

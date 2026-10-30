@@ -46,6 +46,29 @@ The `codex` and `claude` models need no API key. Every other model requires an O
 
 The `codex` model explicitly selects `gpt-6-astra` at max reasoning effort, regardless of your global Codex configuration. Use `--effort` to override the reasoning effort for a run.
 
+## Translation progress
+
+Each batch announces its subtitle range and active model before the request starts.
+While it waits, the terminal display refreshes every second with elapsed batch time
+and backend status. Codex and Claude show their reasoning effort and 30-minute
+per-call timeout; OpenRouter shows request attempts and retry delays. Switching
+backends after a quota error is also reported immediately.
+
+For example, during a slow first batch:
+
+```text
+Batch 1/5: subtitles 1-200 (200 subtitles) | GPT-6 Astra (Codex CLI)
+Translating:   0%|          | 0/964, Batch 1/5 | 01:05 elapsed | Waiting for Codex response (max effort; timeout 30m per call)
+```
+
+The counter advances when a batch has been processed, with translated and failed
+subtitles counted separately. An updating timer means the translator is still
+waiting; it does not measure the model's internal progress or guarantee that the
+backend is responding. Batch summaries show how many translations were returned.
+
+When stderr is redirected to a log, updates are plain, flushed lines every
+15 seconds, plus immediate batch, retry, fallback, and completion messages.
+
 ## Options
 
 | Option | Description |

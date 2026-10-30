@@ -8,6 +8,7 @@ from pathlib import Path
 
 from mkv_subtitle_translator.client import OpenRouterClient
 from mkv_subtitle_translator.models import DEFAULT_MODEL, SUBTITLE_MODELS
+from mkv_subtitle_translator.progress import ProgressCallback
 
 REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
 DEFAULT_EFFORT = "max"
@@ -60,6 +61,10 @@ def _run(
         )
     except FileNotFoundError as exc:
         raise RuntimeError(install_hint) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"{cmd[0]} timed out after {TIMEOUT / 60:g}m waiting for a response"
+        ) from exc
 
 
 def _strip_code_fence(text: str) -> str:
@@ -85,7 +90,12 @@ class CodexClient:
         self.effort = effort
 
     def translate(
-        self, system_prompt: str, user_prompt: str, max_tokens: int = 500
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int = 500,
+        *,
+        progress: ProgressCallback | None = None,
     ) -> tuple[str, int, int]:
         """Translate text and return (translation, 0, 0).
 
@@ -113,6 +123,11 @@ class CodexClient:
                 str(last_message),
                 "-",
             ]
+            if progress:
+                progress(
+                    f"Waiting for Codex response ({self.effort} effort; "
+                    f"timeout {TIMEOUT / 60:g}m per call)"
+                )
             result = _run(cmd, f"{system_prompt}\n\n{user_prompt}", workdir, CODEX_INSTALL_HINT)
 
             if result.returncode != 0:
@@ -143,7 +158,12 @@ class ClaudeClient:
     model_config = SUBTITLE_MODELS[CLAUDE_MODEL]
 
     def translate(
-        self, system_prompt: str, user_prompt: str, max_tokens: int = 500
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int = 500,
+        *,
+        progress: ProgressCallback | None = None,
     ) -> tuple[str, int, int]:
         """Translate text and return (translation, 0, 0)."""
         with tempfile.TemporaryDirectory() as workdir:
@@ -164,6 +184,11 @@ class ClaudeClient:
                 "--system-prompt",
                 system_prompt,
             ]
+            if progress:
+                progress(
+                    f"Waiting for Claude response ({CLAUDE_EFFORT} effort; "
+                    f"timeout {TIMEOUT / 60:g}m per call)"
+                )
             result = _run(cmd, user_prompt, workdir, CLAUDE_INSTALL_HINT)
 
         detail = f"{result.stderr}\n{result.stdout}"
@@ -203,7 +228,11 @@ class FallbackClient:
     def model_config(self) -> dict:
         return self.clients[0].model_config
 
-    def translate(self, *args, **kwargs) -> tuple[str, int, int]:
+    def translate(
+        self, *args, progress: ProgressCallback | None = None, **kwargs
+    ) -> tuple[str, int, int]:
+        if progress:
+            kwargs["progress"] = progress
         while True:
             try:
                 return self.clients[0].translate(*args, **kwargs)
@@ -211,7 +240,11 @@ class FallbackClient:
                 if len(self.clients) == 1:
                     raise
                 self.clients.pop(0)
-                print(f"\nOut of credits - switching to {self.model_config['name']}")
+                message = f"Out of credits - switching to {self.model_config['name']}"
+                if progress:
+                    progress(message)
+                else:
+                    print(f"\n{message}")
 
     def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
         return self.clients[0].estimate_cost(input_tokens, output_tokens)
