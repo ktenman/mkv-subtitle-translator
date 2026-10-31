@@ -96,8 +96,10 @@ class OpenRouterClient:
         max_tokens: int = 500,
         *,
         progress: ProgressCallback | None = None,
+        effort: str | None = None,
     ) -> tuple[str, int, int]:
-        """Translate text and return (translation, input_tokens, output_tokens)"""
+        """Translate text and return (translation, input_tokens, output_tokens).
+        effort is ignored."""
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
