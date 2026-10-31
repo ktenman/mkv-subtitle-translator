@@ -254,6 +254,8 @@ Preserve any formatting or emphasis from the original."""
 
                 # Clean up response (remove quotes if present)
                 translated_text = strip_wrapping_quotes(translated_text)
+                if not translated_text:
+                    raise ValueError("the reply was empty")
                 subtitle.translated_text = translated_text
 
                 # Update stats
@@ -493,7 +495,8 @@ Preserve any formatting or emphasis from the original."""
             for sub in batch:
                 old = sub.translated_text or sub.text
                 new = corrections.get(sub.index)
-                if new and new != old:
+                # The file is already written, so a reply repeating the English must not replace it.
+                if new and new != old and new != sub.text:
                     originals[sub.index] = old
                     sub.translated_text = new
             checked += 1

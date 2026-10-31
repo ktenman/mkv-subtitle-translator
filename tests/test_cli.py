@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 
 from mkv_subtitle_translator.cli import app
 from mkv_subtitle_translator.models import DEFAULT_MODEL
+from mkv_subtitle_translator.translator import TranslationFailed
 
 runner = CliRunner()
 
@@ -209,3 +210,54 @@ def test_folder_run_keeps_a_video_that_is_only_named_temp(tmp_path, mocker):
     runner.invoke(app, [str(tmp_path)])
 
     extract.assert_called_once_with(str(tmp_path / "making.of.temp.mkv"))
+
+
+def test_folder_run_works_when_the_folder_name_has_brackets(tmp_path, mocker):
+    folder = tmp_path / "Show [1080p]"
+    folder.mkdir()
+    (folder / "episode.mkv").touch()
+    (folder / "lone.extracted.srt").write_text(SRT, encoding="utf-8")
+    extract = _extract_to_disk(mocker)
+    translate_file = mocker.patch("mkv_subtitle_translator.cli.OpenRouterTranslator.translate_file")
+
+    runner.invoke(app, [str(folder)])
+
+    extract.assert_called_once_with(str(folder / "episode.mkv"))
+    assert _outputs(translate_file) == ["episode.et.srt", "lone.et.srt"]
+
+
+def test_one_failed_video_does_not_stop_the_others(tmp_path, mocker):
+    for name in ("a", "b", "c"):
+        (tmp_path / f"{name}.mkv").touch()
+        (tmp_path / f"{name}.extracted.srt").write_text(SRT, encoding="utf-8")
+
+    def translate_file(subtitles, output, **kwargs):
+        if output.endswith("b.et.srt"):
+            raise TranslationFailed("1 of 1 subtitles were not translated")
+        Path(output).write_text(SRT, encoding="utf-8")
+
+    mocker.patch(
+        "mkv_subtitle_translator.cli.OpenRouterTranslator.translate_file",
+        side_effect=translate_file,
+    )
+    merge = mocker.patch("mkv_subtitle_translator.cli.merge_subtitles_into_mkv")
+
+    result = runner.invoke(app, [str(tmp_path)])
+
+    assert result.exit_code == 1
+    assert sorted(Path(call.args[0]).name for call in merge.call_args_list) == ["a.mkv", "c.mkv"]
+    assert "Not finished: b.extracted.srt" in result.stdout
+    assert "ALL TRANSLATIONS COMPLETE" not in result.stdout
+
+
+def test_a_failed_merge_is_not_reported_as_complete(tmp_path, mocker):
+    (tmp_path / "show.mkv").touch()
+    (tmp_path / "show.extracted.srt").write_text(SRT, encoding="utf-8")
+    (tmp_path / "show.et.srt").write_text(SRT, encoding="utf-8")
+    mocker.patch("mkv_subtitle_translator.cli.merge_subtitles_into_mkv", return_value=False)
+
+    result = runner.invoke(app, [str(tmp_path)])
+
+    assert result.exit_code == 1
+    assert "Not finished: show.mkv" in result.stdout
+    assert "ALL TRANSLATIONS COMPLETE" not in result.stdout

@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from mkv_subtitle_translator.mkv import (
+    extract_best_subtitle_from_mkv,
     extract_subtitle_from_mkv,
     get_mkv_subtitle_streams,
     merge_subtitles_into_mkv,
@@ -50,6 +51,34 @@ class TestExtractSubtitleFromMkv:
             side_effect=subprocess.CalledProcessError(1, "ffmpeg"),
         )
         assert extract_subtitle_from_mkv("movie.mkv", 0, "out.srt") is False
+
+
+def _tracks(mocker, *tracks):
+    """Fake a video's subtitle tracks, each a (language tag or None, text) pair."""
+    mocker.patch(
+        "mkv_subtitle_translator.mkv.get_mkv_subtitle_streams",
+        return_value=[{"tags": {"language": lang}} if lang else {} for lang, _ in tracks],
+    )
+
+    def extract(mkv_file, index, output):
+        Path(output).write_text(tracks[index][1], encoding="utf-8")
+        return True
+
+    mocker.patch("mkv_subtitle_translator.mkv.extract_subtitle_from_mkv", side_effect=extract)
+
+
+class TestExtractBestSubtitleFromMkv:
+    def test_an_untagged_source_wins_over_a_longer_estonian_track(self, mocker, tmp_path):
+        _tracks(mocker, (None, "Hello"), ("est", "Tere tulemast koju, sõber"))
+
+        extracted = extract_best_subtitle_from_mkv(str(tmp_path / "movie.mkv"))
+
+        assert Path(extracted).read_text(encoding="utf-8") == "Hello"
+
+    def test_a_video_with_only_estonian_has_nothing_to_translate(self, mocker, tmp_path):
+        _tracks(mocker, ("est", "Tere"))
+
+        assert extract_best_subtitle_from_mkv(str(tmp_path / "movie.mkv")) is None
 
 
 class TestMergeSubtitlesIntoMkv:
