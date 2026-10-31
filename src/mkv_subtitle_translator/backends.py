@@ -43,6 +43,10 @@ class QuotaExhausted(RuntimeError):
     """A backend is out of credits - the next one in the chain should take over."""
 
 
+class CliMissing(QuotaExhausted):
+    """A backend's CLI is not installed - the next one in the chain should take over."""
+
+
 def _error(name: str, detail: str) -> Exception:
     # Search the whole output, report only the tail: the quota line is often
     # buried above a long transcript, and truncating first would lose it.
@@ -62,7 +66,7 @@ def _run(
             cmd, input=prompt, capture_output=True, text=True, timeout=TIMEOUT, cwd=workdir
         )
     except FileNotFoundError as exc:
-        raise RuntimeError(install_hint) from exc
+        raise CliMissing(install_hint) from exc
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
             f"{cmd[0]} timed out after {TIMEOUT / 60:g}m waiting for a response"
@@ -222,8 +226,8 @@ class ClaudeClient:
 class FallbackClient:
     """Run the first backend that still has credits, in order.
 
-    A backend that reports being out of credits is dropped for the rest of the
-    run - no point retrying it on every batch.
+    A backend that is out of credits or not installed is dropped for the rest of
+    the run - no point retrying it on every batch.
     """
 
     def __init__(self, clients: list):
@@ -250,14 +254,15 @@ class FallbackClient:
                             raise RuntimeError("Stopped before this call started")
                         return client.translate(*args, **kwargs)
                 return client.translate(*args, **kwargs)
-            except QuotaExhausted:
+            except QuotaExhausted as error:
                 with self._lock:
                     # Another call that failed at the same time may already have moved on.
                     if self.clients[0] is client:
                         if len(self.clients) == 1:
                             raise
                         self.clients.pop(0)
-                        message = f"Out of credits - switching to {self.model_config['name']}"
+                        reason = error if isinstance(error, CliMissing) else "Out of credits"
+                        message = f"{reason} - switching to {self.model_config['name']}"
                         if progress:
                             progress(message)
                         else:
@@ -275,8 +280,9 @@ def uses_cli(model: str) -> bool:
 def build_chain(model: str = DEFAULT_MODEL, effort: str = DEFAULT_EFFORT, api_key: str = ""):
     """Codex -> Claude Code -> OpenRouter, entering at the requested backend.
 
-    Each step takes over only once the one before it runs out of credits.
-    OpenRouter is only reachable when an API key is available.
+    Each step takes over only once the one before it runs out of credits or
+    turns out not to be installed. OpenRouter is only reachable when an API key
+    is available.
     """
     if not uses_cli(model):
         return OpenRouterClient(api_key, model)
