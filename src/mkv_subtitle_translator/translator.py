@@ -434,6 +434,8 @@ Preserve any formatting or emphasis from the original."""
             return saved
 
         reference_texts = [read_reference(reference) for reference in references]
+        for reference, text in zip(references, reference_texts, strict=True):
+            print(f"Reference read: {Path(reference).name} ({len(text.splitlines()):,} lines)")
         with BatchProgress(
             total=1, batches=1, stage="Term sheet", label="Term sheet", done="written"
         ) as progress:
@@ -573,6 +575,9 @@ Preserve any formatting or emphasis from the original."""
         term_sheet = ""
         if batch_mode:
             term_sheet = self._term_sheet(subtitles, source_name, output_path, references)
+            if term_sheet:
+                lines = len(term_sheet.splitlines())
+                print(f"Term sheet in use: {lines:,} lines, sent with every translation and check")
 
         if check_only:
             # ponytail: one marker per file, so finishing repeats the batches that passed.

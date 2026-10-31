@@ -111,6 +111,7 @@ def extract_best_subtitle_from_mkv(mkv_file: str) -> str | None:
     else:
         non_sdh = [f for f in extracted_files if not f["is_sdh"]]
         selected_file = max(non_sdh or extracted_files, key=lambda x: x["size"])
+    print(f"  Using stream {selected_file['index']}")
 
     output_path = f"{os.path.splitext(mkv_file)[0]}.extracted.srt"
     with open(selected_file["path"], encoding="utf-8") as src:

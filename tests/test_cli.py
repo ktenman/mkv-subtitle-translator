@@ -183,6 +183,20 @@ def test_reference_files_reach_translate_file(tmp_path, mocker):
     assert translate_file.call_args.kwargs["references"] == [str(one), str(two)]
 
 
+def test_the_run_starts_by_saying_what_it_will_use(tmp_path, mocker):
+    srt = tmp_path / "show.extracted.srt"
+    srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nHi\n\n", encoding="utf-8")
+    reference = tmp_path / "old.srt"
+    reference.touch()
+    mocker.patch("mkv_subtitle_translator.cli.OpenRouterTranslator.translate_file")
+
+    result = runner.invoke(app, ["-f", str(srt), "--effort", "low", "--reference", str(reference)])
+
+    assert f"Input: {srt}" in result.output
+    assert "Model: GPT-6 Astra (Codex CLI), low effort (high for the term sheet)" in result.output
+    assert f"Reference: {reference}" in result.output
+
+
 def test_no_installed_backend_stops_with_the_install_hint(tmp_path, mocker, monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     srt = tmp_path / "show.extracted.srt"

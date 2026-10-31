@@ -544,6 +544,26 @@ class TestTermSheet:
         assert all("Term sheet:\nCode -> kood" in prompt for prompt in batch_prompts)
         assert out.exists()
 
+    @pytest.mark.parametrize("sheet_exists", [False, True])
+    def test_the_run_says_it_is_in_use(self, mocker, tmp_path, capsys, sheet_exists):
+        if sheet_exists:
+            (tmp_path / "show.et.terms.md").write_text("Code -> kood\n", encoding="utf-8")
+        translator = OpenRouterTranslator("", "codex")
+        mocker.patch.object(translator.client, "translate", side_effect=_backend())
+
+        translator.translate_file(_cues(1), str(tmp_path / "show.et.srt"), source_name="show.srt")
+
+        assert "Term sheet in use: 1 lines" in capsys.readouterr().out
+
+    def test_the_run_does_not_claim_a_sheet_that_failed(self, mocker, tmp_path, capsys):
+        translator = OpenRouterTranslator("", "codex")
+        backend = _backend(sheet=RuntimeError("no reply"))
+        mocker.patch.object(translator.client, "translate", side_effect=backend)
+
+        translator.translate_file(_cues(1), str(tmp_path / "show.et.srt"), source_name="show.srt")
+
+        assert "Term sheet in use" not in capsys.readouterr().out
+
     def test_call_reads_the_whole_source_at_high_effort(self, mocker, tmp_path):
         translator = OpenRouterTranslator("", "codex", "max")
         translate = mocker.patch.object(translator.client, "translate", side_effect=_backend())
@@ -734,6 +754,21 @@ class TestReference:
         first, *rest = [c.args[1] for c in translate.call_args_list]
         assert "Earlier Estonian subtitles" in first and "Hall Rändur" in first
         assert rest and all("Hall Rändur" not in prompt for prompt in rest)
+
+    def test_the_run_says_each_file_was_read(self, mocker, tmp_path, capsys):
+        reference = tmp_path / "old.srt"
+        reference.write_text("1\n00:00:01,000 --> 00:00:02,000\nTume\nReisija\n", encoding="utf-8")
+        translator = OpenRouterTranslator("", "codex")
+        mocker.patch.object(translator.client, "translate", side_effect=_backend())
+
+        translator.translate_file(
+            _cues(1),
+            str(tmp_path / "show.et.srt"),
+            source_name="show.srt",
+            references=[str(reference)],
+        )
+
+        assert "Reference read: old.srt (2 lines)" in capsys.readouterr().out
 
     def test_is_not_read_when_a_sheet_exists_and_the_run_says_so(self, mocker, tmp_path, capsys):
         (tmp_path / "show.et.terms.md").write_text("Code -> kood\n", encoding="utf-8")

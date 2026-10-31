@@ -80,6 +80,13 @@ class TestExtractBestSubtitleFromMkv:
 
         assert extract_best_subtitle_from_mkv(str(tmp_path / "movie.mkv")) is None
 
+    def test_says_which_stream_it_picked(self, mocker, tmp_path, capsys):
+        _tracks(mocker, ("eng", "Hi"), ("eng", "Hello there"))
+
+        extract_best_subtitle_from_mkv(str(tmp_path / "movie.mkv"))
+
+        assert "Using stream 1" in capsys.readouterr().out
+
 
 class TestMergeSubtitlesIntoMkv:
     def test_replaces_existing_estonian_stream(self, mocker):
