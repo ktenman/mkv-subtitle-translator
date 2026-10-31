@@ -27,7 +27,11 @@ from mkv_subtitle_translator.backends import (
 )
 from mkv_subtitle_translator.mkv import extract_best_subtitle_from_mkv, merge_subtitles_into_mkv
 from mkv_subtitle_translator.models import DEFAULT_MODEL, SUBTITLE_MODELS
-from mkv_subtitle_translator.translator import OpenRouterTranslator, deduplicate_subtitles
+from mkv_subtitle_translator.translator import (
+    OpenRouterTranslator,
+    TranslationFailed,
+    deduplicate_subtitles,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -345,6 +349,10 @@ def _main(
         except QuotaExhausted as e:
             console.print(f"\n[red]{e}[/red]")
             console.print("Nothing written - top up or set OPENROUTER_API_KEY and re-run.")
+            raise typer.Exit(1) from e
+        except TranslationFailed as e:
+            console.print(f"\n[red]{e}[/red]")
+            console.print("Nothing written - fix the errors above and re-run.")
             raise typer.Exit(1) from e
 
         print(f"✅ Saved to: {output_file}")

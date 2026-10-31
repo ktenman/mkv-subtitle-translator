@@ -21,6 +21,7 @@ from mkv_subtitle_translator.prompts import (
 )
 from mkv_subtitle_translator.translator import (
     OpenRouterTranslator,
+    TranslationFailed,
     deduplicate_subtitles,
     read_reference,
     strip_wrapping_quotes,
@@ -438,6 +439,81 @@ def _backend(sheet="Code -> kood", check="NONE", tokens=(0, 0)):
 
 def _cues(count=3):
     return [Subtitle(index=str(i), timestamp="t", text=f"Line {i}") for i in range(1, count + 1)]
+
+
+class TestEnglishNeverPassesAsEstonian:
+    def test_a_backend_that_always_fails_writes_nothing(self, mocker, tmp_path):
+        translator = OpenRouterTranslator("", "codex")
+        mocker.patch.object(
+            translator.client, "translate", side_effect=RuntimeError("not logged in")
+        )
+        out = tmp_path / "show.et.srt"
+
+        with pytest.raises(TranslationFailed, match="3 of 3 subtitles"):
+            translator.translate_file(_cues(), str(out), source_name="show.srt")
+
+        assert not out.exists()
+
+    def test_one_failed_batch_writes_nothing(self, mocker, tmp_path):
+        translator = OpenRouterTranslator("", "codex")
+        working = _backend()
+
+        def translate(system, user, **kwargs):
+            if system == BATCH_SYSTEM_PROMPT and "[1] Line 1\n" in user:
+                raise RuntimeError("stream disconnected")
+            return working(system, user, **kwargs)
+
+        mocker.patch.object(translator.client, "translate", side_effect=translate)
+        out = tmp_path / "show.et.srt"
+
+        with pytest.raises(TranslationFailed, match="50 of 200 subtitles"):
+            translator.translate_file(_cues(200), str(out), source_name="show.srt", chunk_size=50)
+
+        assert not out.exists()
+
+    def test_a_reply_with_no_cues_in_it_writes_nothing(self, mocker, tmp_path):
+        translator = OpenRouterTranslator("", "codex")
+        mocker.patch.object(
+            translator.client, "translate", return_value=("I can't help with that.", 0, 0)
+        )
+        out = tmp_path / "show.et.srt"
+
+        with pytest.raises(TranslationFailed):
+            translator.translate_file(_cues(), str(out), source_name="show.srt")
+
+        assert not out.exists()
+
+    def test_per_line_models_follow_the_same_rule(self, mocker, tmp_path):
+        translator = OpenRouterTranslator("dummy-key", "gpt-5.4-pro")
+        mocker.patch.object(translator.client, "translate", side_effect=RuntimeError("offline"))
+        out = tmp_path / "show.et.srt"
+
+        with pytest.raises(TranslationFailed):
+            translator.translate_file(_cues(), str(out), source_name="show.srt")
+
+        assert not out.exists()
+
+    def test_a_few_dropped_cues_keep_the_file(self, mocker, tmp_path):
+        translator = OpenRouterTranslator("", "codex")
+        reply = "\n".join(f"[{n}] Tere" for n in range(1, 199))
+        mocker.patch.object(translator.client, "translate", return_value=(reply, 0, 0))
+        out = tmp_path / "show.et.srt"
+
+        translator.translate_file(_cues(200), str(out), source_name="show.srt")
+
+        assert translator.stats.failed == 2
+        assert "Line 200" in out.read_text(encoding="utf-8-sig")
+
+    def test_one_cue_past_the_limit_writes_nothing(self, mocker, tmp_path):
+        translator = OpenRouterTranslator("", "codex")
+        reply = "\n".join(f"[{n}] Tere" for n in range(1, 198))
+        mocker.patch.object(translator.client, "translate", return_value=(reply, 0, 0))
+        out = tmp_path / "show.et.srt"
+
+        with pytest.raises(TranslationFailed, match="3 of 200 subtitles"):
+            translator.translate_file(_cues(200), str(out), source_name="show.srt")
+
+        assert not out.exists()
 
 
 class TestTermSheet:

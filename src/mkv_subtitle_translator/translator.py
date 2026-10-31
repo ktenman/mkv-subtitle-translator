@@ -46,6 +46,13 @@ _CURLY_QUOTES = re.compile("[„“”]")
 
 TERM_SHEET_EFFORT = "high"
 TERM_SHEET_MAX_TOKENS = 8000
+# ponytail: a flat limit, so a title can keep up to 1% of its cues in English. A few
+# dropped cues are not worth a full re-run, and one failed batch is well past it.
+MAX_FAILED_SHARE = 0.01
+
+
+class TranslationFailed(RuntimeError):
+    """Too many cues are still English to write the file as Estonian."""
 
 
 def terms_path(output_path: str) -> str:
@@ -538,6 +545,11 @@ Preserve any formatting or emphasis from the original."""
         self.translate_subtitles(
             subtitles, chunk_size, max_workers, source_name=source_name, term_sheet=term_sheet
         )
+        # The next run skips a file that exists, so only a finished one may be written.
+        if self.stats.failed > len(subtitles) * MAX_FAILED_SHARE:
+            raise TranslationFailed(
+                f"{self.stats.failed} of {len(subtitles)} subtitles were not translated"
+            )
         self.write_srt(subtitles, output_path)
         if batch_mode and self._check_errors(subtitles, source_name, term_sheet, chunk_size):
             self.write_srt(subtitles, output_path)
