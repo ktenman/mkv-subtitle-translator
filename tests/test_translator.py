@@ -38,29 +38,33 @@ class TestReadSrt:
         subtitles = translator.read_srt(str(srt))
         assert subtitles[0].text == "Hello there my old friend"
 
-    def test_tracks_line_count_per_block(self, tmp_path):
+    def test_keeps_the_source_lines_of_each_block(self, tmp_path):
         srt = tmp_path / "sample.srt"
         srt.write_text(SAMPLE_SRT, encoding="utf-8")
         translator = OpenRouterTranslator("dummy-key")
         subtitles = translator.read_srt(str(srt))
-        assert [s.line_count for s in subtitles] == [2, 1, 2]
+        assert [s.source_lines for s in subtitles] == [
+            ("Hello there", "my old friend"),
+            ("[door creaks]",),
+            ("Nice to see you", "again today"),
+        ]
 
 
 class TestWriteSrt:
-    def test_restores_two_line_blocks(self, tmp_path):
+    def test_two_speaker_block_keeps_its_two_lines(self, tmp_path):
         translator = OpenRouterTranslator("dummy-key")
         sub = Subtitle(
             index="1",
             timestamp="00:00:01,000 --> 00:00:02,000",
-            text="Hello there my old friend",
-            translated_text="Tere seal mu vana sober",
-            line_count=2,
+            text="- Hello. - Hi.",
+            translated_text="- Tere. - Hei.",
+            source_lines=("- Hello.", "- Hi."),
         )
         out = tmp_path / "out.srt"
         translator.write_srt([sub], str(out))
         content = out.read_text(encoding="utf-8-sig")
         text_block = content.split("\n", 2)[2].rstrip("\n")
-        assert "\n" in text_block
+        assert text_block == "- Tere.\n- Hei."
 
     def test_leaves_single_line_blocks_alone(self, tmp_path):
         translator = OpenRouterTranslator("dummy-key")
@@ -69,13 +73,38 @@ class TestWriteSrt:
             timestamp="00:00:01,000 --> 00:00:02,000",
             text="[door creaks]",
             translated_text="[uks kriuksub]",
-            line_count=1,
+            source_lines=("[door creaks]",),
         )
         out = tmp_path / "out.srt"
         translator.write_srt([sub], str(out))
         content = out.read_text(encoding="utf-8-sig")
         text_block = content.split("\n", 2)[2].rstrip("\n")
         assert text_block == "[uks kriuksub]"
+
+    def test_turns_curly_quotes_straight(self, tmp_path):
+        translator = OpenRouterTranslator("dummy-key")
+        sub = Subtitle(
+            index="1",
+            timestamp="00:00:01,000 --> 00:00:02,000",
+            text="'Hi,' he said and 'left'.",
+            translated_text="„Tere“ ütles ta ja “läks” ära.",
+        )
+        out = tmp_path / "out.srt"
+        translator.write_srt([sub], str(out))
+        content = out.read_text(encoding="utf-8-sig")
+        assert content.split("\n", 2)[2].rstrip("\n") == '"Tere" ütles ta ja "läks" ära.'
+
+    def test_output_is_utf8_with_bom(self, tmp_path):
+        translator = OpenRouterTranslator("dummy-key")
+        sub = Subtitle(
+            index="1",
+            timestamp="00:00:01,000 --> 00:00:02,000",
+            text="Hi",
+            translated_text="Tere",
+        )
+        out = tmp_path / "out.srt"
+        translator.write_srt([sub], str(out))
+        assert out.read_bytes().startswith(b"\xef\xbb\xbf")
 
 
 class TestStripWrappingQuotes:

@@ -28,6 +28,7 @@ from mkv_subtitle_translator.progress import BatchProgress
 
 # Openers mapped to the closers that count as a matching pair.
 _QUOTE_PAIRS = {'"': '"', "'": "'", "„": "“”", "“": "”", "«": "»"}
+_CURLY_QUOTES = re.compile("[„“”]")
 
 
 def strip_wrapping_quotes(text: str) -> str:
@@ -86,7 +87,7 @@ class OpenRouterTranslator:
                     timestamp=timestamp,
                     text=text,
                     subtitle_type=subtitle_type,
-                    line_count=len(lines[2:]),
+                    source_lines=tuple(line.strip() for line in lines[2:]),
                 )
                 subtitles.append(subtitle)
 
@@ -415,9 +416,8 @@ Return each line as [number] Estonian translation.
         """Write translated subtitles to a new SRT file"""
         with open(output_path, "w", encoding="utf-8-sig") as file:
             for subtitle in subtitles:
-                text = subtitle.translated_text or subtitle.text
-                if subtitle.line_count == 2:
-                    text = restore_line_break(text)
+                text = _CURLY_QUOTES.sub('"', subtitle.translated_text or subtitle.text)
+                text = restore_line_break(text, subtitle.source_lines)
                 file.write(f"{subtitle.index}\n{subtitle.timestamp}\n{text}\n\n")
 
 

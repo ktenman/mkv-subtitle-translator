@@ -1,32 +1,30 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 
 # ============================================================================
 # Line-break restoration
 #
 # read_srt() joins multi-line subtitle blocks into a single string (the
-# translation protocol sends/receives one line per subtitle). That means a
-# 2-line English subtitle always comes back as 1 translated line. Restore the
-# original 2-line shape at write time using the same split heuristic: break
-# on " - " for two-speaker exchanges, otherwise word-wrap near the midpoint.
+# translation protocol sends/receives one line per subtitle). Lay the line out
+# again at write time from the source cue's lines: two speakers, a lone [label],
+# one line if it fits, otherwise the best space. The words never change, and no
+# prompt mentions layout, because line rules in a prompt lowered quality.
 # ============================================================================
 
-_WRAP_CONJUNCTIONS = {
-    "ja",
-    "et",
-    "aga",
-    "kuid",
-    "sest",
-    "või",
-    "nii",
-    "siis",
-    "ning",
-    "kui",
-    "mis",
-    "kes",
-    "ilma",
-}
+MAX_LINE_LENGTH = 42
+
+_SPEAKER_DASH = re.compile(r"^(?:\{[^}]*\})?(?:<i>)?\s*[-–—]\s")  # noqa: RUF001
+_INNER_DASH = re.compile(r"\s(?:<i>)?\s*[-–—]\s")  # noqa: RUF001
+_LABEL = re.compile(r"\[[^\]]+\]")
+_LABEL_START = re.compile(r"(\[[^\]]+\])\s+(.+)")
+_TAG = re.compile(r"<[^>]*>|\{[^}]*\}")
+_SPACE_OUTSIDE_TAG = re.compile(r" (?![^<>]*>)")
+_NO_BREAK_AFTER = set(
+    "ja ning ega ehk või et kui aga vaid kuid sest mis kes kus ei on see seda selle oma mu su "  # noqa: SIM905
+    "ta ma sa me te nad üks ühe mitte nii kas ka the a an of to".split()
+)
 
 
 def _strip_wrap_tags(line: str) -> tuple[str, str, str]:
@@ -50,69 +48,81 @@ def _strip_wrap_tags(line: str) -> tuple[str, str, str]:
     return prefix, s, suffix
 
 
+def _visible(s: str) -> str:
+    return _TAG.sub("", s).strip()
+
+
 def _split_dash(s: str) -> tuple[str, str] | None:
-    """Split a two-speaker line like '- Hi. - Hello.' into two dash lines."""
-    idx = s.find(" - ", 2)
-    if idx == -1:
+    """Split at the second speaker's dash. Search from 1 to skip the first speaker's."""
+    m = _INNER_DASH.search(s, 1)
+    if m is None:
         return None
-    line1 = s[:idx].rstrip()
-    line2 = "- " + s[idx + 3 :].lstrip()
-    return line1, line2
+    return s[: m.start()].rstrip(), s[m.start() + 1 :].lstrip()
+
+
+def _split_label(s: str) -> tuple[str, str] | None:
+    m = _LABEL_START.fullmatch(s)
+    return (m.group(1), m.group(2)) if m else None
 
 
 def _split_natural(s: str) -> tuple[str, str] | None:
-    """Word-wrap split near the midpoint, preferring a break after a comma
-    or before a common conjunction."""
-    n = len(s)
-    mid = n / 2
+    """The cheapest break: both lines within the limit and close in length."""
+    # ponytail: costs tuned by hand on 13,352 cues, word lists instead of Estonian
+    # grammar. A parser is only worth it if a blind read finds bad breaks.
     best = None
-    best_score = None
-    for m in re.finditer(r" ", s):
-        pos = m.start()
-        if pos < n * 0.25 or pos > n * 0.75:
+    best_cost = None
+    for m in _SPACE_OUTSIDE_TAG.finditer(s):
+        left, right = s[: m.start()], s[m.end() :]
+        a, b = _visible(left), _visible(right)
+        if not a or not b:
             continue
-        score = abs(pos - mid)
-        if pos > 0 and s[pos - 1] in ",:":
-            score -= 8
-        nxt = s[pos + 1 :].split(" ", 1)[0].strip(".,!?…").lower()
-        if nxt in _WRAP_CONJUNCTIONS:
-            score -= 4
-        if best_score is None or score < best_score:
-            best_score = score
-            best = pos
-    if best is None:
-        spaces = [m.start() for m in re.finditer(r" ", s)]
-        if not spaces:
-            return None
-        best = min(spaces, key=lambda p: abs(p - mid))
-    line1 = s[:best].rstrip()
-    line2 = s[best + 1 :].lstrip()
-    return line1, line2
+        cost = abs(len(a) - len(b))
+        if max(len(a), len(b)) > MAX_LINE_LENGTH:
+            cost += 1000
+        last, first = a.split()[-1], b.split()[0]
+        if a[-1] in ",.;:!?…":
+            cost -= 25
+        elif last[0].isupper() and first[0].isupper():
+            cost += 60
+        if last.lower() in _NO_BREAK_AFTER:
+            cost += 15
+        if last[-1].isdigit():
+            cost += 30
+        if first in ("-", "–", "—", "♪"):  # noqa: RUF001
+            cost += 30
+        if best_cost is None or cost < best_cost:
+            best, best_cost = (left.strip(), right.strip()), cost
+    return best
 
 
-def restore_line_break(text: str) -> str:
-    """If text has no embedded newline, split it into two lines so a 2-line
-    source subtitle doesn't collapse into one translated line."""
+def restore_line_break(text: str, source_lines: Sequence[str] = ()) -> str:
+    """Lay out one translated line from the source cue's lines. The words never change."""
     if "\n" in text:
         return text
     prefix, core, suffix = _strip_wrap_tags(text)
-    result = _split_dash(core) if core.startswith("- ") else None
+    result = None
+    if len(source_lines) == 2:
+        if all(_SPEAKER_DASH.match(line) for line in source_lines):
+            result = _split_dash(core)
+        elif _LABEL.fullmatch(source_lines[0]):
+            result = _split_label(core)
     if result is None:
+        if len(_visible(text)) <= MAX_LINE_LENGTH:
+            return text
         result = _split_natural(core)
     if result is None:
         return text
-    line1, line2 = result
-    return f"{prefix}{line1}\n{line2}{suffix}"
+    return f"{prefix}{result[0]}\n{result[1]}{suffix}"
 
 
 def _demo() -> None:
-    assert restore_line_break("single line") != "single line" or " " not in "single line"
-    assert restore_line_break("Hello there") == "Hello\nthere" or "\n" in restore_line_break(
-        "Hello there"
-    )
-    two_speaker = restore_line_break("- Are you coming? - Not tonight.")
+    assert restore_line_break("Hello there") == "Hello there"
+    source = ("- Are you?", "- No.")
+    two_speaker = restore_line_break("- Are you coming? - Not tonight.", source)
     assert two_speaker == "- Are you coming?\n- Not tonight."
-    tagged = restore_line_break("{\\an8}Hello there, my old friend")
+    label = restore_line_break("[door creaks] Who's there?", ("[door creaks]", "Who?"))
+    assert label == "[door creaks]\nWho's there?"
+    tagged = restore_line_break("{\\an8}Hello there, my old friend, how have you been lately?")
     assert tagged.startswith("{\\an8}") and "\n" in tagged
     already_multiline = "line one\nline two"
     assert restore_line_break(already_multiline) == already_multiline
