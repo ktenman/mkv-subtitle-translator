@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import itertools
 import json
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 from mkv_subtitle_translator.mkv import (
@@ -65,6 +67,7 @@ class TestMergeSubtitlesIntoMkv:
         )
         mocker.patch("mkv_subtitle_translator.mkv.os.path.exists", return_value=False)
         rename_mock = mocker.patch("mkv_subtitle_translator.mkv.os.rename")
+        replace_mock = mocker.patch("mkv_subtitle_translator.mkv.os.replace")
 
         result = merge_subtitles_into_mkv("movie.mkv", ["movie.et.srt"], backup=True)
 
@@ -72,7 +75,26 @@ class TestMergeSubtitlesIntoMkv:
         cmd = run_mock.call_args[0][0]
         assert "0:s:0" in cmd
         assert "0:s:1" not in cmd
-        assert rename_mock.call_count == 2
+        rename_mock.assert_called_once_with("movie.mkv", "movie.mkv.backup")
+        replace_mock.assert_called_once_with("movie.mkv.temp.mkv", "movie.mkv")
+
+    def test_second_merge_keeps_the_original_in_the_backup(self, mocker, tmp_path):
+        video = tmp_path / "movie.mkv"
+        video.write_text("original")
+        merges = itertools.count(1)
+
+        def ffmpeg(cmd, **kwargs):
+            Path(cmd[-1]).write_text(f"merge {next(merges)}")
+            return SimpleNamespace(returncode=0, stderr="")
+
+        mocker.patch("mkv_subtitle_translator.mkv.get_mkv_subtitle_streams", return_value=[])
+        mocker.patch("mkv_subtitle_translator.mkv.subprocess.run", side_effect=ffmpeg)
+
+        assert merge_subtitles_into_mkv(str(video), ["movie.et.srt"]) is True
+        assert merge_subtitles_into_mkv(str(video), ["movie.et.srt"]) is True
+
+        assert video.read_text() == "merge 2"
+        assert (tmp_path / "movie.mkv.backup").read_text() == "original"
 
     def test_returns_false_when_ffmpeg_fails(self, mocker):
         mocker.patch("mkv_subtitle_translator.mkv.get_mkv_subtitle_streams", return_value=[])
