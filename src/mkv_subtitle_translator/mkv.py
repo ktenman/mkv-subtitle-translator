@@ -183,11 +183,12 @@ def merge_subtitles_into_mkv(mkv_file: str, subtitle_files: list[str], backup: b
         if backup:
             backup_file = f"{mkv_file}.backup"
             if os.path.exists(backup_file):
-                os.remove(backup_file)
-            print(f"  Creating backup: {backup_file}")
-            os.rename(mkv_file, backup_file)
+                print(f"  Keeping the original in: {backup_file}")
+            else:
+                print(f"  Creating backup: {backup_file}")
+                os.rename(mkv_file, backup_file)
 
-        os.rename(temp_output, mkv_file)
+        os.replace(temp_output, mkv_file)
         print("  ✅ Successfully merged subtitles")
 
         return True

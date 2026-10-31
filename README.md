@@ -34,7 +34,7 @@ A translated video leaves these files next to it:
 
 ```text
 episode.mkv             now has an Estonian subtitle track
-episode.mkv.backup      the video before the last merge
+episode.mkv.backup      the original video
 episode.extracted.srt   the English subtitles
 episode.et.srt          the Estonian subtitles
 episode.et.terms.md     the term sheet
@@ -43,8 +43,7 @@ episode.et.terms.md     the term sheet
 Good to know:
 
 - Files that already have a `.et.srt` are skipped. Add `--force` to translate them again.
-- Running a video again merges it again and overwrites the backup, so the original is lost.
-- If a folder already has `.extracted.srt` files, only those are processed. Use `-f` for a new video in that folder.
+- If a translation fails or runs out of credits, no `.et.srt` is written. Run the same command again to retry.
 - Add `--no-merge` to leave the video as it is, or `--no-backup` to skip the backup.
 - `--help` lists every option.
 
@@ -60,7 +59,7 @@ If a name comes out wrong, fix it in `episode.et.terms.md` and run the video aga
 
 ## Models
 
-By default it uses the `codex` CLI, on your ChatGPT subscription. When that runs out of credits, the `claude` CLI takes over if you have it, then OpenRouter if you also set `OPENROUTER_API_KEY`.
+By default it uses the `codex` CLI, on your ChatGPT subscription. When that runs out of credits, the `claude` CLI takes over, then OpenRouter if you set `OPENROUTER_API_KEY`. Any CLI you don't have is skipped.
 
 ```bash
 # Start on the claude CLI instead of codex

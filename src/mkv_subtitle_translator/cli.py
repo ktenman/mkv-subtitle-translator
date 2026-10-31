@@ -27,7 +27,11 @@ from mkv_subtitle_translator.backends import (
 )
 from mkv_subtitle_translator.mkv import extract_best_subtitle_from_mkv, merge_subtitles_into_mkv
 from mkv_subtitle_translator.models import DEFAULT_MODEL, SUBTITLE_MODELS
-from mkv_subtitle_translator.translator import OpenRouterTranslator, deduplicate_subtitles
+from mkv_subtitle_translator.translator import (
+    OpenRouterTranslator,
+    TranslationFailed,
+    deduplicate_subtitles,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +184,7 @@ def estimate_cost(file_path: str, model: str = DEFAULT_MODEL) -> None:
 
 @app.command()
 def _main(
-    path: Annotated[str, typer.Argument(help="Directory or file to translate")] = ".",
+    path: Annotated[str, typer.Argument(help="Directory to translate")] = ".",
     file: Annotated[
         str | None, typer.Option("-f", "--file", help="Translate a specific file")
     ] = None,
@@ -285,21 +289,18 @@ def _main(
             console.print(f"[red]Error: Invalid directory: {path}[/red]")
             raise typer.Exit(1)
 
-        srt_files = glob.glob(os.path.join(path, "*.extracted.srt"))
-
-        if srt_files and not force:
-            files_to_translate = srt_files
-            for srt in srt_files:
-                mkv = srt.replace(".extracted.srt", ".mkv")
-                if os.path.exists(mkv):
-                    mkv_to_subs_map[mkv] = [srt.replace(".extracted.srt", ".et.srt")]
-        else:
-            mkv_files = glob.glob(os.path.join(path, "*.mkv"))
-            for mkv in mkv_files:
-                extracted = extract_best_subtitle_from_mkv(mkv)
-                if extracted:
-                    files_to_translate.append(extracted)
-                    mkv_to_subs_map[mkv] = [extracted.replace(".extracted.srt", ".et.srt")]
+        srt_files = set(glob.glob(os.path.join(path, "*.extracted.srt")))
+        for mkv in glob.glob(os.path.join(path, "*.mkv")):
+            # A merge that never finished leaves episode.mkv.temp.mkv behind.
+            if mkv.endswith(".mkv.temp.mkv"):
+                continue
+            srt = f"{os.path.splitext(mkv)[0]}.extracted.srt"
+            if force or srt not in srt_files:
+                srt = extract_best_subtitle_from_mkv(mkv)
+            if srt:
+                srt_files.add(srt)
+                mkv_to_subs_map[mkv] = [srt.replace(".extracted.srt", ".et.srt")]
+        files_to_translate = sorted(srt_files)
 
     if not files_to_translate:
         console.print("No files to translate")
@@ -345,6 +346,10 @@ def _main(
         except QuotaExhausted as e:
             console.print(f"\n[red]{e}[/red]")
             console.print("Nothing written - top up or set OPENROUTER_API_KEY and re-run.")
+            raise typer.Exit(1) from e
+        except TranslationFailed as e:
+            console.print(f"\n[red]{e}[/red]")
+            console.print("Nothing written - fix the errors above and re-run.")
             raise typer.Exit(1) from e
 
         print(f"✅ Saved to: {output_file}")

@@ -304,6 +304,38 @@ class TestFallbackClient:
         with pytest.raises(QuotaExhausted):
             chain.translate("s", "u")
 
+    def test_dry_codex_skips_a_missing_claude_and_reaches_the_api(self, mocker):
+        def run(cmd, **kwargs):
+            if cmd[0] == "claude":
+                raise FileNotFoundError(cmd[0])
+            return _fake_run(returncode=1, stderr="UsageLimitReached")(cmd, **kwargs)
+
+        mocker.patch("mkv_subtitle_translator.backends.subprocess.run", side_effect=run)
+        api = _StubClient("api", "Tere")
+        chain = FallbackClient([CodexClient(), ClaudeClient(), api])
+
+        assert chain.translate("s", "u") == ("Tere", 0, 0)
+        assert chain.clients == [api]
+
+    def test_a_missing_cli_is_named_when_the_chain_moves_on(self, mocker):
+        mocker.patch(
+            "mkv_subtitle_translator.backends.subprocess.run", side_effect=FileNotFoundError()
+        )
+        messages = []
+        chain = FallbackClient([ClaudeClient(), _StubClient("next", "Tere")])
+
+        chain.translate("s", "u", progress=messages.append)
+
+        assert "claude CLI not found" in messages[-1] and "switching to next" in messages[-1]
+
+    def test_no_installed_backend_stops_the_chain(self, mocker):
+        mocker.patch(
+            "mkv_subtitle_translator.backends.subprocess.run", side_effect=FileNotFoundError()
+        )
+
+        with pytest.raises(QuotaExhausted, match="claude CLI not found"):
+            FallbackClient([CodexClient(), ClaudeClient()]).translate("s", "u")
+
     def test_two_calls_failing_together_advance_the_chain_once(self):
         barrier = threading.Barrier(2)
 
