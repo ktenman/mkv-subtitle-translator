@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
@@ -65,3 +67,17 @@ def test_exhausted_retries_report_the_reason_without_another_backoff(mocker):
     assert waits == [2]
     assert "attempt 2/2" in messages[-1]
     assert "retrying" not in messages[-1]
+
+
+def test_accepts_and_ignores_effort(mocker):
+    payloads = []
+
+    def handler(request):
+        payloads.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "Tere"}}]})
+
+    mock_transport(mocker, handler)
+    client = OpenRouterClient("key", "gpt-5.4")
+
+    assert client.translate("system", "user", effort="high") == ("Tere", 0, 0)
+    assert "effort" not in str(payloads[0])

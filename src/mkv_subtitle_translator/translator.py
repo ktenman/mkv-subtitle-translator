@@ -1,18 +1,24 @@
 from __future__ import annotations
 
 import concurrent.futures
+import functools
+import os
 import re
 import threading
 import time
+from collections.abc import Callable, Sequence
 from datetime import datetime
+from pathlib import Path
 
 from tqdm import tqdm
 
 from mkv_subtitle_translator.analyzer import SubtitleAnalyzer
 from mkv_subtitle_translator.backends import (
     API_CHUNK_SIZE,
+    CLI_WORKERS,
     DEFAULT_BATCH_SIZE,
     DEFAULT_EFFORT,
+    FallbackClient,
     QuotaExhausted,
     build_chain,
     uses_cli,
@@ -25,9 +31,36 @@ from mkv_subtitle_translator.models import (
     TranslationStats,
 )
 from mkv_subtitle_translator.progress import BatchProgress
+from mkv_subtitle_translator.prompts import (
+    BATCH_SYSTEM_PROMPT,
+    CHECK_SYSTEM_PROMPT,
+    TERM_SHEET_SYSTEM_PROMPT,
+    batch_prompt,
+    check_prompt,
+    term_sheet_prompt,
+)
 
 # Openers mapped to the closers that count as a matching pair.
 _QUOTE_PAIRS = {'"': '"', "'": "'", "„": "“”", "“": "”", "«": "»"}
+_CURLY_QUOTES = re.compile("[„“”]")
+
+TERM_SHEET_EFFORT = "high"
+TERM_SHEET_MAX_TOKENS = 8000
+
+
+def terms_path(output_path: str) -> str:
+    return output_path.removesuffix(".et.srt") + ".et.terms.md"
+
+
+def read_reference(path: str) -> str:
+    """Earlier subtitles as plain text. Older Estonian files are often Windows-1252."""
+    raw = Path(path).read_bytes()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("cp1252", errors="replace")
+    lines = (line.strip() for line in text.splitlines())
+    return "\n".join(line for line in lines if line and not line.isdigit() and "-->" not in line)
 
 
 def strip_wrapping_quotes(text: str) -> str:
@@ -36,6 +69,16 @@ def strip_wrapping_quotes(text: str) -> str:
     if len(text) > 1 and text[-1] in _QUOTE_PAIRS.get(text[0], ""):
         return text[1:-1].strip()
     return text
+
+
+def _parse_numbered(text: str) -> dict[str, str]:
+    """Read the [number] lines of a model reply."""
+    parsed = {}
+    for line in text.split("\n"):
+        match = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
+        if match:
+            parsed[match.group(1)] = strip_wrapping_quotes(match.group(2))
+    return parsed
 
 
 class OpenRouterTranslator:
@@ -86,7 +129,7 @@ class OpenRouterTranslator:
                     timestamp=timestamp,
                     text=text,
                     subtitle_type=subtitle_type,
-                    line_count=len(lines[2:]),
+                    source_lines=tuple(line.strip() for line in lines[2:]),
                 )
                 subtitles.append(subtitle)
 
@@ -228,12 +271,16 @@ Preserve any formatting or emphasis from the original."""
 
         return chunk
 
-    def _batch_translate(self, subtitles: list[Subtitle], batch_size: int = 300) -> list[Subtitle]:
+    def _batch_translate(
+        self,
+        subtitles: list[Subtitle],
+        batch_size: int = 300,
+        *,
+        source_name: str = "",
+        term_sheet: str = "",
+    ) -> list[Subtitle]:
         """Translate subtitles in large batches using models with big context windows.
         Sends many subtitles per API call for massive speed improvement."""
-        self.stats = TranslationStats(total_subtitles=len(subtitles))
-        self.stats.start_time = datetime.now()
-
         model_info = self.client.model_config
         max_output = model_info.get("max_output", 65_536)
 
@@ -242,79 +289,74 @@ Preserve any formatting or emphasis from the original."""
         print(f"Translating {len(subtitles)} subtitles in batches of {batch_size}")
         print(f"{'=' * 60}", flush=True)
 
-        batches = [subtitles[i : i + batch_size] for i in range(0, len(subtitles), batch_size)]
-
-        with BatchProgress(total=len(subtitles), batches=len(batches)) as progress:
-            self._translate_batches(batches, max_output, progress)
-
-        self.stats.end_time = datetime.now()
-        self.stats.estimated_cost = self.client.estimate_cost(
-            self.stats.input_tokens, self.stats.output_tokens
-        )
-        self._print_stats()
+        self._translate_batches(subtitles, batch_size, source_name, term_sheet, max_output)
         return subtitles
 
+    def _run_batches(self, batches: list[list[Subtitle]], call: Callable, finish: Callable) -> None:
+        """Run call(number, batch) on workers, 5 at a time on a CLI backend, and
+        finish(number, batch, future) here. Only this thread touches self.stats.
+        Any exception, Ctrl+C included, cancels what has not started."""
+        workers = CLI_WORKERS if uses_cli(self.model) else 1
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(call, number, batch): (number, batch)
+                for number, batch in enumerate(batches, 1)
+            }
+            try:
+                for future in concurrent.futures.as_completed(futures):
+                    finish(*futures[future], future)
+            except BaseException as error:
+                # Ctrl+C reaches only this thread, and cancel() can't stop a worker
+                # queued for the paid API. Only Ctrl+C, because it ends the process.
+                if isinstance(error, KeyboardInterrupt) and isinstance(self.client, FallbackClient):
+                    self.client.stopping.set()
+                for future in futures:
+                    future.cancel()
+                raise
+
     def _translate_batches(
-        self, batches: list[list[Subtitle]], max_output: int, progress: BatchProgress
+        self,
+        subtitles: list[Subtitle],
+        batch_size: int,
+        source_name: str,
+        term_sheet: str,
+        max_output: int,
     ) -> None:
-        for batch_idx, batch in enumerate(batches):
+        batches = [subtitles[i : i + batch_size] for i in range(0, len(subtitles), batch_size)]
+
+        def call(number: int, batch: list[Subtitle]) -> tuple[str, int, int]:
             progress.start_batch(
-                batch_idx + 1,
+                number,
                 (batch[0].index, batch[-1].index),
                 len(batch),
                 self.client.model_config["name"],
             )
+            start = (number - 1) * batch_size
+            end = start + len(batch)
+            user_prompt = batch_prompt(
+                source_name,
+                term_sheet,
+                subtitles[max(0, start - self.context_window_size) : start],
+                batch,
+                subtitles[end : end + self.context_window_size],
+            )
+
+            # 16K tokens is enough for 200 subs (~80 tokens each with overhead)
+            est_output_tokens = min(len(batch) * 80, max_output)
+
+            return self.client.translate(
+                BATCH_SYSTEM_PROMPT,
+                user_prompt,
+                max_tokens=est_output_tokens,
+                progress=functools.partial(progress.report, number),
+            )
+
+        def finish(number: int, batch: list[Subtitle], future: concurrent.futures.Future) -> None:
             completed_before = self.stats.completed
             failed_before = self.stats.failed
             try:
-                # Build numbered list of subtitles
-                lines = []
-                for sub in batch:
-                    lines.append(f"[{sub.index}] {sub.text}")
-                subtitle_block = "\n".join(lines)
-
-                system_prompt = """You are an expert subtitle translator specializing in \
-English to Estonian translation.
-
-CRITICAL RULES:
-1. Translate ALL subtitles from English to Estonian
-2. Return ONLY the translations in the EXACT same format: [number] translated text
-3. Keep the [number] prefix exactly as given
-4. Do NOT skip any subtitle - translate every single one
-5. Do NOT add explanations, notes, or comments
-6. Terms of endearment (honey, dear, sweetheart, baby, darling) → Estonian \
-endearments (kallis, kullake, armas) NOT literal translations like "mesi"
-7. Use natural, conversational Estonian
-8. Translate idioms to Estonian equivalents, not literally
-9. Keep sound effects in brackets: [door slams] → [uks paugub]
-10. Preserve any formatting (italics, dashes for speaker changes)"""
-
-                user_prompt = f"""Translate all {len(batch)} subtitles below to Estonian. \
-Return each line as [number] Estonian translation.
-
-{subtitle_block}"""
-
-                # 16K tokens is enough for 200 subs (~80 tokens each with overhead)
-                est_output_tokens = min(len(batch) * 80, max_output)
-
-                translated_text, input_tokens, output_tokens = self.client.translate(
-                    system_prompt,
-                    user_prompt,
-                    max_tokens=est_output_tokens,
-                    progress=progress.report,
-                )
-
-                # Parse response - match [number] translation lines
-                translations = {}
-                for line in translated_text.split("\n"):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    match = re.match(r"\[(\d+)\]\s*(.*)", line)
-                    if match:
-                        idx = match.group(1)
-                        trans = strip_wrapping_quotes(match.group(2))
-                        translations[idx] = trans
+                translated_text, input_tokens, output_tokens = future.result()
+                translations = _parse_numbered(translated_text)
 
                 # Apply translations
                 for sub in batch:
@@ -333,28 +375,196 @@ Return each line as [number] Estonian translation.
                 # Every backend is dry - keep going and we'd write English as Estonian.
                 raise
             except Exception as e:
-                progress.report(f"Error: {e}")
+                progress.report(number, f"Error: {e}")
                 for sub in batch:
                     if not sub.translated_text:
                         sub.translated_text = sub.text
                         self.stats.failed += 1
             progress.finish_batch(
-                self.stats.completed - completed_before, self.stats.failed - failed_before
+                number,
+                self.stats.completed - completed_before,
+                self.stats.failed - failed_before,
             )
 
+        with BatchProgress(total=len(subtitles), batches=len(batches)) as progress:
+            self._run_batches(batches, call, finish)
+
+    def _chunk_size(self, chunk_size: int | None) -> int:
+        if chunk_size is None:
+            return DEFAULT_BATCH_SIZE if uses_cli(self.model) else API_CHUNK_SIZE
+        return chunk_size
+
+    def _term_sheet(
+        self,
+        subtitles: list[Subtitle],
+        source_name: str,
+        output_path: str,
+        references: Sequence[str],
+    ) -> str:
+        """Read the saved sheet, or ask the model for one. Failure is not fatal: the
+        batches still translate, only without shared terms."""
+        path = Path(terms_path(output_path))
+        saved = path.read_text(encoding="utf-8").strip() if path.exists() else ""
+        if saved:
+            print(f"Reusing term sheet: {path}")
+            if references:
+                print("--reference files were not read because the term sheet already exists")
+            return saved
+
+        reference_texts = [read_reference(reference) for reference in references]
+        with BatchProgress(
+            total=1, batches=1, stage="Term sheet", label="Term sheet", done="written"
+        ) as progress:
+            progress.start_batch(
+                1,
+                (subtitles[0].index, subtitles[-1].index),
+                len(subtitles),
+                self.client.model_config["name"],
+            )
+            try:
+                sheet, input_tokens, output_tokens = self.client.translate(
+                    TERM_SHEET_SYSTEM_PROMPT,
+                    term_sheet_prompt(source_name, subtitles, reference_texts),
+                    max_tokens=TERM_SHEET_MAX_TOKENS,
+                    effort=TERM_SHEET_EFFORT,
+                    progress=functools.partial(progress.report, 1),
+                )
+                if not sheet.strip():
+                    raise ValueError("the reply was empty")
+            except QuotaExhausted:
+                raise
+            except Exception as e:
+                progress.finish_batch(1, 0, 1)
+                print(f"Term sheet failed, continuing without one: {e}")
+                return ""
+            self.stats.input_tokens += input_tokens
+            self.stats.output_tokens += output_tokens
+            progress.finish_batch(1, 1, 0)
+
+        path.write_text(f"{sheet}\n", encoding="utf-8")
+        print(f"Term sheet saved: {path}")
+        return sheet
+
+    def _check_errors(
+        self, subtitles: list[Subtitle], source_name: str, term_sheet: str, batch_size: int
+    ) -> int:
+        """Correct real errors and return how many cues changed. The file is already
+        written, so a failed check costs only the corrections it would have made."""
+        max_output = self.client.model_config.get("max_output", 65_536)
+        batches = [subtitles[i : i + batch_size] for i in range(0, len(subtitles), batch_size)]
+        originals: dict[str, str] = {}
+        checked = 0
+
+        def call(number: int, batch: list[Subtitle]) -> tuple[str, int, int]:
+            progress.start_batch(
+                number,
+                (batch[0].index, batch[-1].index),
+                len(batch),
+                self.client.model_config["name"],
+            )
+            return self.client.translate(
+                CHECK_SYSTEM_PROMPT,
+                check_prompt(source_name, term_sheet, subtitles, batch),
+                max_tokens=min(len(batch) * 80, max_output),
+                progress=functools.partial(progress.report, number),
+            )
+
+        def finish(number: int, batch: list[Subtitle], future: concurrent.futures.Future) -> None:
+            nonlocal checked
+            try:
+                reply, input_tokens, output_tokens = future.result()
+            except QuotaExhausted:
+                raise
+            except Exception as e:
+                progress.report(number, f"Error: {e}")
+                progress.finish_batch(number, 0, len(batch))
+                return
+
+            self.stats.input_tokens += input_tokens
+            self.stats.output_tokens += output_tokens
+            corrections = _parse_numbered(reply)
+            for sub in batch:
+                old = sub.translated_text or sub.text
+                new = corrections.get(sub.index)
+                if new and new != old:
+                    originals[sub.index] = old
+                    sub.translated_text = new
+            checked += 1
+            progress.finish_batch(number, len(batch), 0)
+
+        with BatchProgress(
+            total=len(subtitles),
+            batches=len(batches),
+            stage="Checking",
+            label="Check",
+            done="checked",
+        ) as progress:
+            try:
+                self._run_batches(batches, call, finish)
+            except QuotaExhausted as e:
+                print(f"Error check stopped: {e}")
+
+        print(f"Error check corrected {len(originals)} subtitles:")
+        for sub in subtitles:
+            if sub.index in originals:
+                print(f"  #{sub.index}: {originals[sub.index]} -> {sub.translated_text}")
+        if checked < len(batches):
+            print(f"{len(batches) - checked} of {len(batches)} batches could not be checked")
+        return len(originals)
+
+    def translate_file(
+        self,
+        subtitles: list[Subtitle],
+        output_path: str,
+        *,
+        source_name: str,
+        references: Sequence[str] = (),
+        chunk_size: int | None = None,
+        max_workers: int = 8,
+    ) -> None:
+        """Run every stage for one file and write the result."""
+        chunk_size = self._chunk_size(chunk_size)
+        self.stats = TranslationStats(total_subtitles=len(subtitles))
+        self.stats.start_time = datetime.now()
+
+        if references and not self.client.model_config.get("supports_batch"):
+            print("--reference needs a batch model and was ignored")
+
+        batch_mode = bool(subtitles) and bool(self.client.model_config.get("supports_batch"))
+        term_sheet = ""
+        if batch_mode:
+            term_sheet = self._term_sheet(subtitles, source_name, output_path, references)
+
+        self.translate_subtitles(
+            subtitles, chunk_size, max_workers, source_name=source_name, term_sheet=term_sheet
+        )
+        self.write_srt(subtitles, output_path)
+        if batch_mode and self._check_errors(subtitles, source_name, term_sheet, chunk_size):
+            self.write_srt(subtitles, output_path)
+
+        self.stats.end_time = datetime.now()
+        self.stats.estimated_cost = self.client.estimate_cost(
+            self.stats.input_tokens, self.stats.output_tokens
+        )
+        self._print_stats()
+
     def translate_subtitles(
-        self, subtitles: list[Subtitle], chunk_size: int | None = None, max_workers: int = 8
+        self,
+        subtitles: list[Subtitle],
+        chunk_size: int | None = None,
+        max_workers: int = 8,
+        *,
+        source_name: str = "",
+        term_sheet: str = "",
     ) -> list[Subtitle]:
         """Translate subtitles - uses batch mode for large-context models"""
-        if chunk_size is None:
-            chunk_size = DEFAULT_BATCH_SIZE if uses_cli(self.model) else API_CHUNK_SIZE
+        chunk_size = self._chunk_size(chunk_size)
 
         # Auto-detect batch mode for models that support it
         if self.client.model_config.get("supports_batch"):
-            return self._batch_translate(subtitles, batch_size=chunk_size)
-
-        self.stats = TranslationStats(total_subtitles=len(subtitles))
-        self.stats.start_time = datetime.now()
+            return self._batch_translate(
+                subtitles, batch_size=chunk_size, source_name=source_name, term_sheet=term_sheet
+            )
 
         # Split into chunks
         chunks = [subtitles[i : i + chunk_size] for i in range(0, len(subtitles), chunk_size)]
@@ -385,14 +595,6 @@ Return each line as [number] Estonian translation.
                     print(f"\nChunk error: {e}")
 
         pbar.close()
-        self.stats.end_time = datetime.now()
-
-        # Calculate final cost
-        self.stats.estimated_cost = self.client.estimate_cost(
-            self.stats.input_tokens, self.stats.output_tokens
-        )
-
-        self._print_stats()
         return subtitles
 
     def _print_stats(self):
@@ -413,12 +615,14 @@ Return each line as [number] Estonian translation.
 
     def write_srt(self, subtitles: list[Subtitle], output_path: str):
         """Write translated subtitles to a new SRT file"""
-        with open(output_path, "w", encoding="utf-8-sig") as file:
+        # ponytail: a kill mid-write leaves the .tmp behind, and the next write replaces it.
+        temp_path = f"{output_path}.tmp"
+        with open(temp_path, "w", encoding="utf-8-sig") as file:
             for subtitle in subtitles:
-                text = subtitle.translated_text or subtitle.text
-                if subtitle.line_count == 2:
-                    text = restore_line_break(text)
+                text = _CURLY_QUOTES.sub('"', subtitle.translated_text or subtitle.text)
+                text = restore_line_break(text, subtitle.source_lines)
                 file.write(f"{subtitle.index}\n{subtitle.timestamp}\n{text}\n\n")
+        os.replace(temp_path, output_path)
 
 
 def deduplicate_subtitles(subtitles: list[Subtitle]) -> list[Subtitle]:

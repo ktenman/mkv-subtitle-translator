@@ -33,7 +33,7 @@ class TestSubtitleDataclass:
         sub = Subtitle(index="1", timestamp="00:00:01,000 --> 00:00:02,000", text="Hi")
         assert sub.subtitle_type is None
         assert sub.translated_text is None
-        assert sub.line_count == 1
+        assert sub.source_lines == ()
 
     def test_subtitle_type_values(self):
         assert SubtitleType.DIALOGUE.value == "dialogue"

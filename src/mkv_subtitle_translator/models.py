@@ -241,7 +241,7 @@ class Subtitle:
     text: str
     subtitle_type: SubtitleType | None = None
     translated_text: str | None = None
-    line_count: int = 1
+    source_lines: tuple[str, ...] = ()
 
 
 @dataclass
