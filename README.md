@@ -16,13 +16,63 @@ Each launch checks GitHub for a newer release. If there is one, the tool upgrade
 
 ## Usage
 
+### Translate
+
 ```bash
-# Translate every .mkv in the current directory with GPT-6 Astra through Codex
+# Every .mkv in the current folder, with GPT-6 Astra through Codex
 mkv-subtitle-translator
 
-# Translate a specific file
+# Every .mkv in another folder
+mkv-subtitle-translator ~/Videos/season-2
+
+# One video
 mkv-subtitle-translator -f episode.mkv
 
+# A plain subtitle file, which writes subtitles.et.srt
+mkv-subtitle-translator -f subtitles.srt
+
+# Translate again, even if a .et.srt already exists
+mkv-subtitle-translator -f episode.mkv --force
+
+# Write the subtitles but leave the video as it is
+mkv-subtitle-translator -f episode.mkv --no-merge
+```
+
+A translated video leaves these files next to it:
+
+```text
+episode.mkv             now has an Estonian subtitle track
+episode.mkv.backup      the original video
+episode.extracted.srt   the English subtitles
+episode.et.srt          the Estonian subtitles
+episode.et.terms.md     the term sheet, reused by later runs
+```
+
+### Keep series terms the same across episodes
+
+Give `--reference` the Estonian subtitles of an earlier episode, and the new translation
+reuses its names and series terms. One earlier episode is enough, and it can be a file this
+tool wrote or one you downloaded. It needs a batch model, listed under
+[How it works](#how-it-works).
+
+```bash
+# One episode
+mkv-subtitle-translator -f s02e01.mkv --reference s01e10.et.srt
+
+# A whole season: every episode reads the same reference
+mkv-subtitle-translator ~/Videos/season-2 --reference ~/Videos/season-1/s01e10.et.srt
+
+# More than one reference: repeat the flag
+mkv-subtitle-translator -f s02e01.mkv --reference s01e09.et.srt --reference s01e10.et.srt
+
+# An episode translated before: delete its term sheet first, or the reference is not read
+rm s02e01.et.terms.md
+mkv-subtitle-translator -f s02e01.mkv --reference s01e10.et.srt --force
+```
+
+### Choose the model and effort
+
+```bash
 # Use less reasoning effort for faster translations (default: max)
 mkv-subtitle-translator -f episode.mkv --effort high
 
@@ -37,12 +87,6 @@ mkv-subtitle-translator --list-models
 
 # Estimate cost before translating
 mkv-subtitle-translator --estimate episode.mkv
-
-# Re-translate even if a .et.srt already exists
-mkv-subtitle-translator -f episode.mkv --force
-
-# Keep series terms from an earlier episode's Estonian subtitles
-mkv-subtitle-translator -f episode.mkv --reference earlier-episode.et.srt
 ```
 
 The `codex` and `claude` models need no API key. Every other model requires an OpenRouter API key, via `--api-key` or the `OPENROUTER_API_KEY` environment variable. Get one at https://openrouter.ai/keys. Setting a key also unlocks the last step of the fallback chain.
