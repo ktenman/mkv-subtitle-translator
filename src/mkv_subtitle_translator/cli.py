@@ -292,7 +292,7 @@ def _main(
         srt_files = set(glob.glob(os.path.join(path, "*.extracted.srt")))
         for mkv in glob.glob(os.path.join(path, "*.mkv")):
             # A merge that never finished leaves episode.mkv.temp.mkv behind.
-            if mkv.endswith(".temp.mkv"):
+            if mkv.endswith(".mkv.temp.mkv"):
                 continue
             srt = f"{os.path.splitext(mkv)[0]}.extracted.srt"
             if force or srt not in srt_files:

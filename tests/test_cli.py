@@ -199,3 +199,13 @@ def test_folder_run_ignores_a_merge_that_never_finished(tmp_path, mocker):
     assert "No files to translate" in result.stdout
     extract.assert_not_called()
     translate_file.assert_not_called()
+
+
+def test_folder_run_keeps_a_video_that_is_only_named_temp(tmp_path, mocker):
+    (tmp_path / "making.of.temp.mkv").touch()
+    extract = _extract_to_disk(mocker)
+    mocker.patch("mkv_subtitle_translator.cli.OpenRouterTranslator.translate_file")
+
+    runner.invoke(app, [str(tmp_path)])
+
+    extract.assert_called_once_with(str(tmp_path / "making.of.temp.mkv"))
