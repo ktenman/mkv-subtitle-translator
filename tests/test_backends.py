@@ -169,6 +169,29 @@ class TestTranslate:
         assert not isinstance(exc.value, QuotaExhausted)
 
 
+class TestEffortOverride:
+    def test_a_call_can_override_the_codex_effort(self, mocker):
+        run = mocker.patch(
+            "mkv_subtitle_translator.backends.subprocess.run", side_effect=_fake_run()
+        )
+        messages = []
+
+        CodexClient(effort="max").translate("s", "u", progress=messages.append, effort="high")
+
+        assert "model_reasoning_effort=high" in run.call_args.args[0]
+        assert "high effort" in messages[0]
+
+    def test_claude_accepts_and_ignores_effort(self, mocker):
+        run = mocker.patch(
+            "mkv_subtitle_translator.backends.subprocess.run", side_effect=_fake_claude_run()
+        )
+
+        ClaudeClient().translate("s", "u", effort="high")
+
+        command = run.call_args.args[0]
+        assert command[command.index("--effort") + 1] == "max"
+
+
 class TestClaudeTranslate:
     def test_reports_waiting_before_launching_claude(self, mocker):
         messages = []

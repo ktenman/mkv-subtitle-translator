@@ -5,8 +5,9 @@ import functools
 import re
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime
+from pathlib import Path
 
 from tqdm import tqdm
 
@@ -28,11 +29,23 @@ from mkv_subtitle_translator.models import (
     TranslationStats,
 )
 from mkv_subtitle_translator.progress import BatchProgress
-from mkv_subtitle_translator.prompts import BATCH_SYSTEM_PROMPT, batch_prompt
+from mkv_subtitle_translator.prompts import (
+    BATCH_SYSTEM_PROMPT,
+    TERM_SHEET_SYSTEM_PROMPT,
+    batch_prompt,
+    term_sheet_prompt,
+)
 
 # Openers mapped to the closers that count as a matching pair.
 _QUOTE_PAIRS = {'"': '"', "'": "'", "„": "“”", "“": "”", "«": "»"}
 _CURLY_QUOTES = re.compile("[„“”]")
+
+TERM_SHEET_EFFORT = "high"
+TERM_SHEET_MAX_TOKENS = 8000
+
+
+def terms_path(output_path: str) -> str:
+    return output_path.removesuffix(".et.srt") + ".et.terms.md"
 
 
 def strip_wrapping_quotes(text: str) -> str:
@@ -253,9 +266,6 @@ Preserve any formatting or emphasis from the original."""
     ) -> list[Subtitle]:
         """Translate subtitles in large batches using models with big context windows.
         Sends many subtitles per API call for massive speed improvement."""
-        self.stats = TranslationStats(total_subtitles=len(subtitles))
-        self.stats.start_time = datetime.now()
-
         model_info = self.client.model_config
         max_output = model_info.get("max_output", 65_536)
 
@@ -265,12 +275,6 @@ Preserve any formatting or emphasis from the original."""
         print(f"{'=' * 60}", flush=True)
 
         self._translate_batches(subtitles, batch_size, source_name, term_sheet, max_output)
-
-        self.stats.end_time = datetime.now()
-        self.stats.estimated_cost = self.client.estimate_cost(
-            self.stats.input_tokens, self.stats.output_tokens
-        )
-        self._print_stats()
         return subtitles
 
     def _run_batches(self, batches: list[list[Subtitle]], call: Callable, finish: Callable) -> None:
@@ -366,6 +370,86 @@ Preserve any formatting or emphasis from the original."""
         with BatchProgress(total=len(subtitles), batches=len(batches)) as progress:
             self._run_batches(batches, call, finish)
 
+    def _chunk_size(self, chunk_size: int | None) -> int:
+        if chunk_size is None:
+            return DEFAULT_BATCH_SIZE if uses_cli(self.model) else API_CHUNK_SIZE
+        return chunk_size
+
+    def _term_sheet(
+        self,
+        subtitles: list[Subtitle],
+        source_name: str,
+        output_path: str,
+        references: Sequence[str],
+    ) -> str:
+        """Read the saved sheet, or ask the model for one. Failure is not fatal: the
+        batches still translate, only without shared terms."""
+        path = Path(terms_path(output_path))
+        if path.exists():
+            print(f"Reusing term sheet: {path}")
+            return path.read_text(encoding="utf-8").strip()
+
+        with BatchProgress(
+            total=1, batches=1, stage="Term sheet", label="Term sheet", done="written"
+        ) as progress:
+            progress.start_batch(
+                1,
+                (subtitles[0].index, subtitles[-1].index),
+                len(subtitles),
+                self.client.model_config["name"],
+            )
+            try:
+                sheet, input_tokens, output_tokens = self.client.translate(
+                    TERM_SHEET_SYSTEM_PROMPT,
+                    term_sheet_prompt(source_name, subtitles, []),
+                    max_tokens=TERM_SHEET_MAX_TOKENS,
+                    effort=TERM_SHEET_EFFORT,
+                    progress=functools.partial(progress.report, 1),
+                )
+            except QuotaExhausted:
+                raise
+            except Exception as e:
+                progress.finish_batch(1, 0, 1)
+                print(f"Term sheet failed, continuing without one: {e}")
+                return ""
+            self.stats.input_tokens += input_tokens
+            self.stats.output_tokens += output_tokens
+            progress.finish_batch(1, 1, 0)
+
+        path.write_text(f"{sheet}\n", encoding="utf-8")
+        print(f"Term sheet saved: {path}")
+        return sheet
+
+    def translate_file(
+        self,
+        subtitles: list[Subtitle],
+        output_path: str,
+        *,
+        source_name: str,
+        references: Sequence[str] = (),
+        chunk_size: int | None = None,
+        max_workers: int = 8,
+    ) -> None:
+        """Run every stage for one file and write the result."""
+        self.stats = TranslationStats(total_subtitles=len(subtitles))
+        self.stats.start_time = datetime.now()
+
+        batch_mode = bool(subtitles) and bool(self.client.model_config.get("supports_batch"))
+        term_sheet = ""
+        if batch_mode:
+            term_sheet = self._term_sheet(subtitles, source_name, output_path, references)
+
+        self.translate_subtitles(
+            subtitles, chunk_size, max_workers, source_name=source_name, term_sheet=term_sheet
+        )
+        self.write_srt(subtitles, output_path)
+
+        self.stats.end_time = datetime.now()
+        self.stats.estimated_cost = self.client.estimate_cost(
+            self.stats.input_tokens, self.stats.output_tokens
+        )
+        self._print_stats()
+
     def translate_subtitles(
         self,
         subtitles: list[Subtitle],
@@ -376,17 +460,13 @@ Preserve any formatting or emphasis from the original."""
         term_sheet: str = "",
     ) -> list[Subtitle]:
         """Translate subtitles - uses batch mode for large-context models"""
-        if chunk_size is None:
-            chunk_size = DEFAULT_BATCH_SIZE if uses_cli(self.model) else API_CHUNK_SIZE
+        chunk_size = self._chunk_size(chunk_size)
 
         # Auto-detect batch mode for models that support it
         if self.client.model_config.get("supports_batch"):
             return self._batch_translate(
                 subtitles, batch_size=chunk_size, source_name=source_name, term_sheet=term_sheet
             )
-
-        self.stats = TranslationStats(total_subtitles=len(subtitles))
-        self.stats.start_time = datetime.now()
 
         # Split into chunks
         chunks = [subtitles[i : i + chunk_size] for i in range(0, len(subtitles), chunk_size)]
@@ -417,14 +497,6 @@ Preserve any formatting or emphasis from the original."""
                     print(f"\nChunk error: {e}")
 
         pbar.close()
-        self.stats.end_time = datetime.now()
-
-        # Calculate final cost
-        self.stats.estimated_cost = self.client.estimate_cost(
-            self.stats.input_tokens, self.stats.output_tokens
-        )
-
-        self._print_stats()
         return subtitles
 
     def _print_stats(self):

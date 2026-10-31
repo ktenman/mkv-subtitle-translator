@@ -46,6 +46,16 @@ The `codex` and `claude` models need no API key. Every other model requires an O
 
 The `codex` model explicitly selects `gpt-6-astra` at max reasoning effort, regardless of your global Codex configuration. Use `--effort` to override the reasoning effort for a run.
 
+## Term sheet
+
+On models that translate in batches, one call reads the whole file first and writes a
+short term sheet: the setting, the characters, who says sina or teie to whom, and one
+Estonian form for each name and recurring term. Every batch gets the sheet, so terms
+stay the same across the file.
+
+The sheet is saved next to the output as `<name>.et.terms.md`, and a saved sheet is
+reused. If a term is wrong, fix it there and re-run with `--force`.
+
 ## Translation progress
 
 Batches run five at a time on the `codex` and `claude` models and one at a time on

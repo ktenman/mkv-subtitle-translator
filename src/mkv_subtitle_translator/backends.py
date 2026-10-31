@@ -98,11 +98,13 @@ class CodexClient:
         max_tokens: int = 500,
         *,
         progress: ProgressCallback | None = None,
+        effort: str | None = None,
     ) -> tuple[str, int, int]:
         """Translate text and return (translation, 0, 0).
 
         max_tokens is ignored - codex exec has no output-length knob.
         """
+        effort = effort or self.effort
         with tempfile.TemporaryDirectory() as workdir:
             last_message = Path(workdir) / "last_message.txt"
             cmd = [
@@ -120,14 +122,14 @@ class CodexClient:
                 "-m",
                 self.model_id,
                 "-c",
-                f"model_reasoning_effort={self.effort}",
+                f"model_reasoning_effort={effort}",
                 "-o",
                 str(last_message),
                 "-",
             ]
             if progress:
                 progress(
-                    f"Waiting for Codex response ({self.effort} effort; "
+                    f"Waiting for Codex response ({effort} effort; "
                     f"timeout {TIMEOUT / 60:g}m per call)"
                 )
             result = _run(cmd, f"{system_prompt}\n\n{user_prompt}", workdir, CODEX_INSTALL_HINT)
@@ -166,8 +168,9 @@ class ClaudeClient:
         max_tokens: int = 500,
         *,
         progress: ProgressCallback | None = None,
+        effort: str | None = None,
     ) -> tuple[str, int, int]:
-        """Translate text and return (translation, 0, 0)."""
+        """Translate text and return (translation, 0, 0). effort is ignored."""
         with tempfile.TemporaryDirectory() as workdir:
             cmd = [
                 "claude",

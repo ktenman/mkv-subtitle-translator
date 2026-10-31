@@ -32,6 +32,9 @@ logger = logging.getLogger(__name__)
 
 GITHUB_REPO = "ktenman/mkv-subtitle-translator"
 
+SHEET_INPUT_PER_CUE = 12
+SHEET_OUTPUT_TOKENS = 1_000
+
 app = typer.Typer(
     name="mkv-subtitle-translator",
     help="Translate SRT subtitles to Estonian via the Codex CLI or OpenRouter.",
@@ -119,6 +122,15 @@ def list_models() -> None:
     console.print(f"\nDefault: [green]{DEFAULT_MODEL}[/green] (best quality/cost balance)")
 
 
+def _estimated_tokens(cues: int, model: str) -> tuple[int, int]:
+    total_input = cues * 150
+    total_output = cues * 30
+    if SUBTITLE_MODELS[model].get("supports_batch"):
+        total_input += cues * SHEET_INPUT_PER_CUE
+        total_output += SHEET_OUTPUT_TOKENS
+    return total_input, total_output
+
+
 def estimate_cost(file_path: str, model: str = DEFAULT_MODEL) -> None:
     """Estimate translation cost for a file (supports .srt and .mkv)."""
     srt_path = file_path
@@ -138,10 +150,7 @@ def estimate_cost(file_path: str, model: str = DEFAULT_MODEL) -> None:
     if temp_extracted and os.path.exists(srt_path):
         os.remove(srt_path)
 
-    avg_input_tokens = 150
-    avg_output_tokens = 30
-    total_input = len(subtitles) * avg_input_tokens
-    total_output = len(subtitles) * avg_output_tokens
+    total_input, total_output = _estimated_tokens(len(subtitles), model)
 
     config = SUBTITLE_MODELS.get(model, SUBTITLE_MODELS[DEFAULT_MODEL])
     input_cost = (total_input / 1_000_000) * config["cost_per_1m_input"]
@@ -158,8 +167,9 @@ def estimate_cost(file_path: str, model: str = DEFAULT_MODEL) -> None:
     table.add_column("Model", style="cyan")
     table.add_column("Est. cost", justify="right")
     for key, cfg in SUBTITLE_MODELS.items():
-        ic = (total_input / 1_000_000) * cfg["cost_per_1m_input"]
-        oc = (total_output / 1_000_000) * cfg["cost_per_1m_output"]
+        key_input, key_output = _estimated_tokens(len(subtitles), key)
+        ic = (key_input / 1_000_000) * cfg["cost_per_1m_input"]
+        oc = (key_output / 1_000_000) * cfg["cost_per_1m_output"]
         table.add_row(key, f"${ic + oc:.4f}")
     console.print(table)
 
@@ -311,15 +321,18 @@ def _main(
             print(f"  {t}: {count} ({count / len(subtitles) * 100:.1f}%)")
 
         try:
-            translated = translator.translate_subtitles(
-                subtitles, chunk_size=chunk_size, max_workers=max_workers
+            translator.translate_file(
+                subtitles,
+                output_file,
+                source_name=Path(input_file).name,
+                chunk_size=chunk_size,
+                max_workers=max_workers,
             )
         except QuotaExhausted as e:
             console.print(f"\n[red]{e}[/red]")
             console.print("Nothing written - top up or set OPENROUTER_API_KEY and re-run.")
             raise typer.Exit(1) from e
 
-        translator.write_srt(translated, output_file)
         print(f"✅ Saved to: {output_file}")
 
     if not no_merge and mkv_to_subs_map:

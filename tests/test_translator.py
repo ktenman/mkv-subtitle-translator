@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import threading
 import time
 
@@ -11,6 +12,7 @@ from mkv_subtitle_translator.backends import (
     QuotaExhausted,
 )
 from mkv_subtitle_translator.models import Subtitle
+from mkv_subtitle_translator.prompts import BATCH_SYSTEM_PROMPT, TERM_SHEET_SYSTEM_PROMPT
 from mkv_subtitle_translator.translator import (
     OpenRouterTranslator,
     deduplicate_subtitles,
@@ -349,6 +351,124 @@ class TestParallelBatches:
             translator.translate_subtitles(subtitles, chunk_size=1)
 
         assert translate_mock.call_count < 12
+
+
+def _backend(sheet="Code -> kood", tokens=(0, 0)):
+    """Answer each stage's prompt. Pass an exception as sheet to fail that stage."""
+
+    def translate(system, user, **kwargs):
+        if system == TERM_SHEET_SYSTEM_PROMPT:
+            if isinstance(sheet, BaseException):
+                raise sheet
+            return (sheet, *tokens)
+        block = user.split("Estonian translation.\n\n")[1].split("\n\nContext only")[0]
+        numbers = re.findall(r"^\[(\d+)\]", block, re.M)
+        return ("\n".join(f"[{n}] Tere" for n in numbers), *tokens)
+
+    return translate
+
+
+def _cues(count=3):
+    return [Subtitle(index=str(i), timestamp="t", text=f"Line {i}") for i in range(1, count + 1)]
+
+
+class TestTermSheet:
+    def test_is_saved_and_reaches_every_batch(self, mocker, tmp_path):
+        translator = OpenRouterTranslator("", "codex")
+        translate = mocker.patch.object(translator.client, "translate", side_effect=_backend())
+        out = tmp_path / "show.et.srt"
+
+        translator.translate_file(_cues(), str(out), source_name="show.srt", chunk_size=1)
+
+        assert (tmp_path / "show.et.terms.md").read_text(encoding="utf-8").strip() == "Code -> kood"
+        calls = translate.call_args_list
+        batch_prompts = [c.args[1] for c in calls if c.args[0] == BATCH_SYSTEM_PROMPT]
+        assert len(batch_prompts) == 3
+        assert all("Term sheet:\nCode -> kood" in prompt for prompt in batch_prompts)
+        assert out.exists()
+
+    def test_call_reads_the_whole_source_at_high_effort(self, mocker, tmp_path):
+        translator = OpenRouterTranslator("", "codex", "max")
+        translate = mocker.patch.object(translator.client, "translate", side_effect=_backend())
+
+        translator.translate_file(_cues(), str(tmp_path / "show.et.srt"), source_name="show.srt")
+
+        sheet_call = translate.call_args_list[0]
+        assert "Source file: show.srt" in sheet_call.args[1]
+        assert "[1] Line 1\n[2] Line 2\n[3] Line 3" in sheet_call.args[1]
+        assert sheet_call.kwargs["effort"] == "high"
+        assert sheet_call.kwargs["max_tokens"] == 8000
+        assert "effort" not in translate.call_args_list[1].kwargs
+
+    def test_existing_sheet_is_reused_and_named(self, mocker, tmp_path, capsys):
+        translator = OpenRouterTranslator("", "codex")
+        (tmp_path / "show.et.terms.md").write_text("Code -> seadus\n", encoding="utf-8")
+        translate = mocker.patch.object(translator.client, "translate", side_effect=_backend())
+
+        translator.translate_file(_cues(1), str(tmp_path / "show.et.srt"), source_name="show.srt")
+
+        assert all(c.args[0] != TERM_SHEET_SYSTEM_PROMPT for c in translate.call_args_list)
+        assert "Term sheet:\nCode -> seadus" in translate.call_args.args[1]
+        assert "Reusing term sheet" in capsys.readouterr().out
+
+    def test_failed_call_warns_and_continues_without_a_sheet(self, mocker, tmp_path, capsys):
+        translator = OpenRouterTranslator("", "codex")
+        translate = mocker.patch.object(
+            translator.client, "translate", side_effect=_backend(RuntimeError("offline"))
+        )
+        out = tmp_path / "show.et.srt"
+
+        translator.translate_file(_cues(1), str(out), source_name="show.srt")
+
+        assert "Term sheet:" not in translate.call_args.args[1]
+        assert "continuing without" in capsys.readouterr().out
+        assert out.exists()
+        assert not (tmp_path / "show.et.terms.md").exists()
+
+    def test_quota_raises_and_writes_nothing(self, mocker, tmp_path):
+        translator = OpenRouterTranslator("", "codex")
+        mocker.patch.object(
+            translator.client, "translate", side_effect=_backend(QuotaExhausted("dry"))
+        )
+        out = tmp_path / "show.et.srt"
+
+        with pytest.raises(QuotaExhausted):
+            translator.translate_file(_cues(1), str(out), source_name="show.srt")
+
+        assert not out.exists()
+
+    def test_per_line_models_get_no_sheet(self, mocker, tmp_path):
+        translator = OpenRouterTranslator("dummy-key", "gpt-5.4-pro")
+        translate = mocker.patch.object(translator.client, "translate", return_value=("Tere", 1, 1))
+        out = tmp_path / "show.et.srt"
+
+        translator.translate_file(_cues(1), str(out), source_name="show.srt")
+
+        assert translate.call_count == 1
+        assert not (tmp_path / "show.et.terms.md").exists()
+        assert "Tere" in out.read_text(encoding="utf-8-sig")
+
+    def test_no_cues_makes_no_call_and_writes_an_empty_file(self, mocker, tmp_path):
+        translator = OpenRouterTranslator("", "codex")
+        translate = mocker.patch.object(translator.client, "translate")
+        out = tmp_path / "show.et.srt"
+
+        translator.translate_file([], str(out), source_name="show.srt")
+
+        translate.assert_not_called()
+        assert out.read_bytes() == b""
+
+    def test_stats_cover_the_sheet_and_start_fresh_for_each_file(self, mocker, tmp_path):
+        translator = OpenRouterTranslator("dummy-key", "gpt-5.4")
+        mocker.patch.object(translator.client, "translate", side_effect=_backend(tokens=(10, 1)))
+
+        for name in ("one", "two"):
+            translator.translate_file(
+                _cues(1), str(tmp_path / f"{name}.et.srt"), source_name=f"{name}.srt"
+            )
+
+        assert translator.stats.input_tokens == 20
+        assert translator.stats.total_subtitles == 1
 
 
 class TestChunkSizeDefault:

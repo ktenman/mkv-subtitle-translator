@@ -64,3 +64,22 @@ def test_non_positive_chunk_size_is_rejected(size):
     # A non-positive size yields zero batches, which would write English as Estonian.
     result = runner.invoke(app, ["--chunk-size", size, "--list-models"])
     assert result.exit_code != 0
+
+
+def test_estimate_adds_the_term_sheet_for_batch_models_only():
+    from mkv_subtitle_translator.cli import _estimated_tokens
+
+    assert _estimated_tokens(964, "gpt-5.4-pro") == (144_600, 28_920)
+    assert _estimated_tokens(964, "gpt-5.6-sol") == (156_168, 29_920)
+
+
+def test_translates_through_translate_file(tmp_path, mocker):
+    srt = tmp_path / "show.extracted.srt"
+    srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nHi\n\n", encoding="utf-8")
+    translate_file = mocker.patch("mkv_subtitle_translator.cli.OpenRouterTranslator.translate_file")
+
+    result = runner.invoke(app, ["-f", str(srt), "--model", "codex"])
+
+    assert result.exit_code == 0
+    assert translate_file.call_args.args[1] == str(tmp_path / "show.et.srt")
+    assert translate_file.call_args.kwargs["source_name"] == "show.extracted.srt"
