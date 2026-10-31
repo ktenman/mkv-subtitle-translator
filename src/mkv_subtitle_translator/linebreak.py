@@ -15,8 +15,10 @@ from collections.abc import Sequence
 
 MAX_LINE_LENGTH = 42
 
-_SPEAKER_DASH = re.compile(r"^(?:\{[^}]*\})?(?:<i>)?\s*[-–—]\s")  # noqa: RUF001
-_INNER_DASH = re.compile(r"\s(?:<i>)?\s*[-–—]\s")  # noqa: RUF001
+# A dash before a space or a letter: -5 and -- are not speaker changes.
+_DASH = r"(?:<[^>]*>)*\s*[-–—](?=\s|[^\W\d_])"  # noqa: RUF001
+_SPEAKER_DASH = re.compile(r"^(?:\{[^}]*\})?" + _DASH)
+_INNER_DASH = re.compile(r"\s" + _DASH)
 _LABEL = re.compile(r"\[[^\]]+\]")
 _LABEL_START = re.compile(r"(\[[^\]]+\])\s+(.+)")
 _TAG = re.compile(r"<[^>]*>|\{[^}]*\}")
@@ -102,7 +104,7 @@ def restore_line_break(text: str, source_lines: Sequence[str] = ()) -> str:
     prefix, core, suffix = _strip_wrap_tags(text)
     result = None
     if len(source_lines) == 2:
-        if all(_SPEAKER_DASH.match(line) for line in source_lines):
+        if _SPEAKER_DASH.match(source_lines[1]):
             result = _split_dash(core)
         elif _LABEL.fullmatch(source_lines[0]):
             result = _split_label(core)

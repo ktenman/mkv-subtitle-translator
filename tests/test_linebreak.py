@@ -20,6 +20,11 @@ class TestSpeakers:
         result = restore_line_break("{\\an8}- Kas tuled? - Täna mitte.", source)
         assert result == "{\\an8}- Kas tuled?\n- Täna mitte."
 
+    def test_looks_past_an8_on_the_second_line(self):
+        source = ("{\\an8}- Are you coming?", "{\\an8}- Not tonight.")
+        result = restore_line_break("{\\an8}- Kas tuled? - Täna mitte.", source)
+        assert result == "{\\an8}- Kas tuled?\n- Täna mitte."
+
     def test_finds_a_dash_inside_an_italic_tag(self):
         source = ("- ♪ music", "<i>- Line two</i>")
         result = restore_line_break("- ♪ muusika <i>- Teine rida</i>", source)
@@ -32,6 +37,33 @@ class TestSpeakers:
 
     def test_no_inner_dash_falls_through_to_the_length_rules(self):
         assert restore_line_break("Kas tuled?", ("- Are you?", "- No.")) == "Kas tuled?"
+
+    def test_splits_a_dash_with_no_space_after_it(self):
+        result = restore_line_break("-Kas tuled? -Täna mitte.", ("-Are you?", "-Not tonight."))
+        assert result == "-Kas tuled?\n-Täna mitte."
+
+    def test_splits_when_only_the_second_line_has_a_dash(self):
+        result = restore_line_break("Kas tuled? - Täna mitte.", ("Are you?", "- Not tonight."))
+        assert result == "Kas tuled?\n- Täna mitte."
+
+    def test_looks_past_a_font_tag(self):
+        source = ('<font color="#ffffff">- Are you?</font>', '<font color="#ffffff">- No.</font>')
+        result = restore_line_break(
+            '<font color="#ffffff">- Kas tuled?</font> <font color="#ffffff">- Ei.</font>', source
+        )
+        assert result == (
+            '<font color="#ffffff">- Kas tuled?</font>\n<font color="#ffffff">- Ei.</font>'
+        )
+
+    def test_a_double_dash_is_not_a_speaker(self):
+        source = ("-I was just --", "-Not tonight.")
+        result = restore_line_break("-Ma just -- -Täna mitte.", source)
+        assert result == "-Ma just --\n-Täna mitte."
+
+    def test_a_negative_number_is_not_a_speaker(self):
+        source = ("-It is -5 today.", "-Cold.")
+        result = restore_line_break("-Täna on -5 kraadi. -Külm.", source)
+        assert result == "-Täna on -5 kraadi.\n-Külm."
 
 
 class TestLabel:
