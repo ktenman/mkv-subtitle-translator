@@ -225,6 +225,15 @@ def _main(
         ),
     ] = None,
     max_workers: Annotated[int, typer.Option("--max-workers", help="Max parallel workers")] = 8,
+    reference: Annotated[
+        list[Path] | None,
+        typer.Option(
+            "--reference",
+            exists=True,
+            dir_okay=False,
+            help="Earlier Estonian subtitles for names and series terms (repeatable)",
+        ),
+    ] = None,
 ) -> None:
     """Translate subtitles to Estonian via the Codex CLI or OpenRouter."""
     current_version = version("mkv-subtitle-translator")
@@ -325,6 +334,7 @@ def _main(
                 subtitles,
                 output_file,
                 source_name=Path(input_file).name,
+                references=[str(path) for path in reference or []],
                 chunk_size=chunk_size,
                 max_workers=max_workers,
             )

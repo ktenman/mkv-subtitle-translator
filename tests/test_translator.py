@@ -16,6 +16,7 @@ from mkv_subtitle_translator.prompts import BATCH_SYSTEM_PROMPT, TERM_SHEET_SYST
 from mkv_subtitle_translator.translator import (
     OpenRouterTranslator,
     deduplicate_subtitles,
+    read_reference,
     strip_wrapping_quotes,
 )
 
@@ -469,6 +470,67 @@ class TestTermSheet:
 
         assert translator.stats.input_tokens == 20
         assert translator.stats.total_subtitles == 1
+
+
+class TestReference:
+    def test_reads_windows_1252_and_drops_numbers_and_timing(self, tmp_path):
+        path = tmp_path / "old.srt"
+        path.write_bytes("1\r\n00:00:01,000 --> 00:00:02,000\r\nTüdruk õues\r\n".encode("cp1252"))
+        assert read_reference(str(path)) == "Tüdruk õues"
+
+    def test_reads_utf8_with_bom(self, tmp_path):
+        path = tmp_path / "old.srt"
+        path.write_text("1\n00:00:01,000 --> 00:00:02,000\nTüdruk\n", encoding="utf-8-sig")
+        assert read_reference(str(path)) == "Tüdruk"
+
+    def test_an_undefined_byte_does_not_stop_the_run(self, tmp_path):
+        path = tmp_path / "old.srt"
+        path.write_bytes(b"T\xfcdruk \x81")
+        assert read_reference(str(path)).startswith("Tüdruk")
+
+    def test_reaches_only_the_sheet_prompt(self, mocker, tmp_path):
+        reference = tmp_path / "old.srt"
+        reference.write_text("Tume Reisija", encoding="utf-8")
+        translator = OpenRouterTranslator("", "codex")
+        translate = mocker.patch.object(translator.client, "translate", side_effect=_backend())
+
+        translator.translate_file(
+            _cues(1),
+            str(tmp_path / "show.et.srt"),
+            source_name="show.srt",
+            references=[str(reference)],
+        )
+
+        first, *rest = [c.args[1] for c in translate.call_args_list]
+        assert "Earlier Estonian subtitles" in first and "Tume Reisija" in first
+        assert rest and all("Tume Reisija" not in prompt for prompt in rest)
+
+    def test_is_not_read_when_a_sheet_exists_and_the_run_says_so(self, mocker, tmp_path, capsys):
+        (tmp_path / "show.et.terms.md").write_text("Code -> kood\n", encoding="utf-8")
+        translator = OpenRouterTranslator("", "codex")
+        mocker.patch.object(translator.client, "translate", side_effect=_backend())
+
+        translator.translate_file(
+            _cues(1),
+            str(tmp_path / "show.et.srt"),
+            source_name="show.srt",
+            references=[str(tmp_path / "gone.srt")],
+        )
+
+        assert "not read" in capsys.readouterr().out
+
+    def test_per_line_models_say_it_was_ignored(self, mocker, tmp_path, capsys):
+        translator = OpenRouterTranslator("dummy-key", "gpt-5.4-pro")
+        mocker.patch.object(translator.client, "translate", return_value=("Tere", 1, 1))
+
+        translator.translate_file(
+            _cues(1),
+            str(tmp_path / "show.et.srt"),
+            source_name="show.srt",
+            references=[str(tmp_path / "old.srt")],
+        )
+
+        assert "--reference" in capsys.readouterr().out
 
 
 class TestChunkSizeDefault:

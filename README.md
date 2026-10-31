@@ -40,6 +40,9 @@ mkv-subtitle-translator --estimate episode.mkv
 
 # Re-translate even if a .et.srt already exists
 mkv-subtitle-translator -f episode.mkv --force
+
+# Keep series terms from an earlier episode's Estonian subtitles
+mkv-subtitle-translator -f episode.mkv --reference earlier-episode.et.srt
 ```
 
 The `codex` and `claude` models need no API key. Every other model requires an OpenRouter API key, via `--api-key` or the `OPENROUTER_API_KEY` environment variable. Get one at https://openrouter.ai/keys. Setting a key also unlocks the last step of the fallback chain.
@@ -55,6 +58,11 @@ stay the same across the file.
 
 The sheet is saved next to the output as `<name>.et.terms.md`, and a saved sheet is
 reused. If a term is wrong, fix it there and re-run with `--force`.
+
+For a series, `--reference` gives that call Estonian subtitles of an earlier episode, so
+names and series terms stay the same across episodes. One earlier episode is enough. It
+helps series terms, not style or general accuracy. Only the term sheet call reads it, so
+a saved sheet means the file is not read, and the run says so.
 
 ## Translation progress
 
@@ -97,3 +105,4 @@ When stderr is redirected to a log, updates are plain, flushed lines every
 | `--force` | Re-translate even if the `.et.srt` output already exists |
 | `--chunk-size` | Batch/chunk size for translation requests (default: 200 for CLI models, 50 otherwise) |
 | `--max-workers` | Max parallel workers for non-batch models (default: 8) |
+| `--reference FILE` | Earlier Estonian subtitles for names and series terms; repeatable; batch models only |

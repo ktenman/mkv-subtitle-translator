@@ -83,3 +83,23 @@ def test_translates_through_translate_file(tmp_path, mocker):
     assert result.exit_code == 0
     assert translate_file.call_args.args[1] == str(tmp_path / "show.et.srt")
     assert translate_file.call_args.kwargs["source_name"] == "show.extracted.srt"
+
+
+def test_missing_reference_file_is_rejected():
+    result = runner.invoke(app, ["--reference", "/no/such/file.srt", "--list-models"])
+    assert result.exit_code != 0
+
+
+def test_reference_files_reach_translate_file(tmp_path, mocker):
+    srt = tmp_path / "show.extracted.srt"
+    srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nHi\n\n", encoding="utf-8")
+    one, two = tmp_path / "one.srt", tmp_path / "two.srt"
+    one.touch()
+    two.touch()
+    translate_file = mocker.patch("mkv_subtitle_translator.cli.OpenRouterTranslator.translate_file")
+
+    args = ["-f", str(srt), "--reference", str(one), "--reference", str(two)]
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == 0
+    assert translate_file.call_args.kwargs["references"] == [str(one), str(two)]

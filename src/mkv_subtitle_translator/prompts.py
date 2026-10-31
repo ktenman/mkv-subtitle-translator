@@ -59,4 +59,12 @@ def batch_prompt(
 
 
 def term_sheet_prompt(source_name: str, subtitles: list[Subtitle], references: list[str]) -> str:
-    return f"Source file: {source_name}\n\nEnglish episode:\n{numbered(subtitles)}"
+    sections = [f"Source file: {source_name}"]
+    if references:
+        sections.append(
+            "Earlier Estonian subtitles from the same series follow. Reuse their established "
+            "names and series terms. Ignore their style, line breaks and typos."
+        )
+        sections.extend(references)
+    sections.append(f"English episode:\n{numbered(subtitles)}")
+    return "\n\n".join(sections)

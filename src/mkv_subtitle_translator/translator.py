@@ -48,6 +48,17 @@ def terms_path(output_path: str) -> str:
     return output_path.removesuffix(".et.srt") + ".et.terms.md"
 
 
+def read_reference(path: str) -> str:
+    """Earlier subtitles as plain text. Older Estonian files are often Windows-1252."""
+    raw = Path(path).read_bytes()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("cp1252", errors="replace")
+    lines = (line.strip() for line in text.splitlines())
+    return "\n".join(line for line in lines if line and not line.isdigit() and "-->" not in line)
+
+
 def strip_wrapping_quotes(text: str) -> str:
     """Drop quotes that wrap the whole line, keeping quotes inside it."""
     text = text.strip()
@@ -387,8 +398,11 @@ Preserve any formatting or emphasis from the original."""
         path = Path(terms_path(output_path))
         if path.exists():
             print(f"Reusing term sheet: {path}")
+            if references:
+                print("--reference files were not read because the term sheet already exists")
             return path.read_text(encoding="utf-8").strip()
 
+        reference_texts = [read_reference(reference) for reference in references]
         with BatchProgress(
             total=1, batches=1, stage="Term sheet", label="Term sheet", done="written"
         ) as progress:
@@ -401,7 +415,7 @@ Preserve any formatting or emphasis from the original."""
             try:
                 sheet, input_tokens, output_tokens = self.client.translate(
                     TERM_SHEET_SYSTEM_PROMPT,
-                    term_sheet_prompt(source_name, subtitles, []),
+                    term_sheet_prompt(source_name, subtitles, reference_texts),
                     max_tokens=TERM_SHEET_MAX_TOKENS,
                     effort=TERM_SHEET_EFFORT,
                     progress=functools.partial(progress.report, 1),
@@ -433,6 +447,9 @@ Preserve any formatting or emphasis from the original."""
         """Run every stage for one file and write the result."""
         self.stats = TranslationStats(total_subtitles=len(subtitles))
         self.stats.start_time = datetime.now()
+
+        if references and not self.client.model_config.get("supports_batch"):
+            print("--reference needs a batch model and was ignored")
 
         batch_mode = bool(subtitles) and bool(self.client.model_config.get("supports_batch"))
         term_sheet = ""
