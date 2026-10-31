@@ -475,8 +475,10 @@ class TestTermSheet:
 class TestReference:
     def test_reads_windows_1252_and_drops_numbers_and_timing(self, tmp_path):
         path = tmp_path / "old.srt"
-        path.write_bytes("1\r\n00:00:01,000 --> 00:00:02,000\r\nTüdruk õues\r\n".encode("cp1252"))
-        assert read_reference(str(path)) == "Tüdruk õues"
+        path.write_bytes(
+            "1\r\n00:00:01,000 --> 00:00:02,000\r\nTüdruk šokolaad\r\n".encode("cp1252")
+        )
+        assert read_reference(str(path)) == "Tüdruk šokolaad"
 
     def test_reads_utf8_with_bom(self, tmp_path):
         path = tmp_path / "old.srt"
