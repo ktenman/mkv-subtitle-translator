@@ -31,7 +31,7 @@ CLAUDE_INSTALL_HINT = "claude CLI not found on PATH. See https://claude.com/clau
 # Covers codex (UsageLimitReached, QuotaExceeded, "rate limit") and Claude Code
 # ("Usage limit reached", "Credit balance is too low", rate_limit_error). Kept
 # specific on purpose: a false match demotes a free backend onto the paid one,
-# and the text we search includes stdout, which echoes "[429] ..." subtitle lines.
+# and the text we search can hold a reply's "[429] ..." subtitle lines.
 _QUOTA_PATTERN = re.compile(
     r"usage.?limit|rate.?limit|too many requests|quota|credit balance"
     r"|out of credits|insufficient.{0,20}(credit|quota|balance|fund)",
@@ -58,12 +58,18 @@ def _error(name: str, detail: str) -> Exception:
     return RuntimeError(f"{name} failed: {detail}")
 
 
+def _without_echo(output: str, prompt: str) -> str:
+    """Drop the prompt lines a CLI printed back, because a subtitle can say "quota"."""
+    echoed = set(prompt.splitlines())
+    return "\n".join(line for line in output.splitlines() if line not in echoed)
+
+
 def _run(
-    cmd: list[str], prompt: str, workdir: str, install_hint: str
+    cmd: list[str | bytes], prompt: str, workdir: str, install_hint: str
 ) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(
-            cmd, input=prompt, capture_output=True, text=True, timeout=TIMEOUT, cwd=workdir
+            cmd, input=prompt, capture_output=True, encoding="utf-8", timeout=TIMEOUT, cwd=workdir
         )
     except FileNotFoundError as exc:
         raise CliMissing(install_hint) from exc
@@ -136,10 +142,12 @@ class CodexClient:
                     f"Waiting for Codex response ({effort} effort; "
                     f"timeout {TIMEOUT / 60:g}m per call)"
                 )
-            result = _run(cmd, f"{system_prompt}\n\n{user_prompt}", workdir, CODEX_INSTALL_HINT)
+            prompt = f"{system_prompt}\n\n{user_prompt}"
+            result = _run(cmd, prompt, workdir, CODEX_INSTALL_HINT)
 
             if result.returncode != 0:
-                raise _error("codex", f"{result.stderr}\n{result.stdout}")
+                # codex prints the whole prompt to stderr before it starts.
+                raise _error("codex", _without_echo(f"{result.stderr}\n{result.stdout}", prompt))
 
             text = ""
             if last_message.exists():
@@ -191,7 +199,8 @@ class ClaudeClient:
                 "--tools",
                 "",
                 "--system-prompt",
-                system_prompt,
+                # Bytes, because Python encodes a str argument with the locale's encoding.
+                system_prompt.encode(),
             ]
             if progress:
                 progress(

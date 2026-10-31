@@ -28,7 +28,9 @@ def get_mkv_subtitle_streams(mkv_file: str) -> list[dict]:
             "json",
             mkv_file,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = subprocess.run(
+            cmd, capture_output=True, encoding="utf-8", errors="replace", check=True
+        )
         data = json.loads(result.stdout)
         return data.get("streams", [])
     except (subprocess.CalledProcessError, FileNotFoundError):
@@ -178,7 +180,7 @@ def merge_subtitles_into_mkv(mkv_file: str, subtitle_files: list[str], backup: b
         cmd.extend(["-y", temp_output])
 
         print("  Running ffmpeg...")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace")
 
         if result.returncode != 0:
             print(f"  Error: {result.stderr}")

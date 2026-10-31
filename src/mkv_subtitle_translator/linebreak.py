@@ -19,10 +19,11 @@ MAX_LINE_LENGTH = 42
 _DASH = r"(?:<[^>]*>)*\s*[-–—](?=\s|[^\W\d_])"  # noqa: RUF001
 _SPEAKER_DASH = re.compile(r"^(?:\{[^}]*\})?" + _DASH)
 _INNER_DASH = re.compile(r"\s" + _DASH)
-_LABEL = re.compile(r"\[[^\]]+\]")
-_LABEL_START = re.compile(r"(\[[^\]]+\])\s+(.+)")
+_SENTENCE_END = re.compile(r"[.?!…][\"')»]*$")
 _TAG = re.compile(r"<[^>]*>|\{[^}]*\}")
-_SPACE_OUTSIDE_TAG = re.compile(r" (?![^<>]*>)")
+_LABEL = re.compile(r"\[[^\]]+\]")
+_LABEL_START = re.compile(rf"((?:{_TAG.pattern})*\[[^\]]+\](?:{_TAG.pattern})*)\s+(.+)")
+_SPACE_OUTSIDE_TAG = re.compile(r" (?![^<>]*>)(?![^{}]*\})")
 _NO_BREAK_AFTER = set(
     "ja ning ega ehk või et kui aga vaid kuid sest mis kes kus ei on see seda selle oma mu su "  # noqa: SIM905
     "ta ma sa me te nad üks ühe mitte nii kas ka the a an of to".split()
@@ -55,10 +56,12 @@ def _visible(s: str) -> str:
 
 
 def _split_dash(s: str) -> tuple[str, str] | None:
-    """Split at the second speaker's dash. Search from 1 to skip the first speaker's."""
-    m = _INNER_DASH.search(s, 1)
-    if m is None:
+    """Split at the second speaker's dash: the first one after a finished sentence, because
+    a turn can hold a spaced hyphen. Search from 1 to skip the first speaker's."""
+    dashes = list(_INNER_DASH.finditer(s, 1))
+    if not dashes:
         return None
+    m = next((d for d in dashes if _SENTENCE_END.search(_visible(s[: d.start()]))), dashes[0])
     return s[: m.start()].rstrip(), s[m.start() + 1 :].lstrip()
 
 
@@ -106,7 +109,7 @@ def restore_line_break(text: str, source_lines: Sequence[str] = ()) -> str:
     if len(source_lines) == 2:
         if _SPEAKER_DASH.match(source_lines[1]):
             result = _split_dash(core)
-        elif _LABEL.fullmatch(source_lines[0]):
+        elif _LABEL.fullmatch(_visible(source_lines[0])):
             result = _split_label(core)
     if result is None:
         if len(_visible(text)) <= MAX_LINE_LENGTH:

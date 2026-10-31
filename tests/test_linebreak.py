@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from mkv_subtitle_translator.linebreak import restore_line_break
 
 LONG = "Ma ei tea, kas me jõuame täna õhtul koju tagasi"
@@ -65,12 +67,60 @@ class TestSpeakers:
         result = restore_line_break("-Täna on -5 kraadi. -Külm.", source)
         assert result == "-Täna on -5 kraadi.\n-Külm."
 
+    def test_a_spaced_hyphen_in_the_first_turn_is_not_the_second_speaker(self):
+        source = ("- I was, how to say, tired.", "- Not tonight.")
+        result = restore_line_break("- Ma olin - kuidas öelda - väsinud. - Täna mitte.", source)
+        assert result == "- Ma olin - kuidas öelda - väsinud.\n- Täna mitte."
+
+    def test_a_first_turn_can_end_in_a_quote(self):
+        source = ('- She said, how to say, "no."', "- Fine.")
+        result = restore_line_break('- Ta ütles - kuidas öelda - "ei." - Hästi.', source)
+        assert result == '- Ta ütles - kuidas öelda - "ei."\n- Hästi.'
+
+    def test_with_no_finished_sentence_the_first_dash_splits(self):
+        source = ("- Are you", "- Not tonight.")
+        result = restore_line_break("- Kas tuled - Täna mitte - Hästi", source)
+        assert result == "- Kas tuled\n- Täna mitte - Hästi"
+
 
 class TestLabel:
     def test_keeps_a_lone_label_on_line_one(self):
         source = ("[door creaks]", "Who's there?")
         result = restore_line_break("[uks kriuksub] Kes seal on?", source)
         assert result == "[uks kriuksub]\nKes seal on?"
+
+    @pytest.mark.parametrize(
+        ("source", "text", "expected"),
+        [
+            (
+                ("{\\an8}[door creaks]", "Who's there?"),
+                "{\\an8}[uks kriuksub] Kes seal on?",
+                "{\\an8}[uks kriuksub]\nKes seal on?",
+            ),
+            (
+                ("<i>[door creaks]</i>", "Who's there?"),
+                "<i>[uks kriuksub]</i> Kes seal on?",
+                "<i>[uks kriuksub]</i>\nKes seal on?",
+            ),
+            (
+                ("<i>[door creaks]", "Who's there?</i>"),
+                "<i>[uks kriuksub] Kes seal on?</i>",
+                "<i>[uks kriuksub]\nKes seal on?</i>",
+            ),
+            (
+                ("<i>[door creaks]</i>", "<i>Who's there?</i>"),
+                "<i>[uks kriuksub]</i> <i>Kes seal on?</i>",
+                "<i>[uks kriuksub]</i>\n<i>Kes seal on?</i>",
+            ),
+            (
+                ("{\\pos(10,20)}[door creaks]", "Who's there?"),
+                "{\\pos(10,20)}[uks kriuksub] Kes seal on?",
+                "{\\pos(10,20)}[uks kriuksub]\nKes seal on?",
+            ),
+        ],
+    )
+    def test_a_label_with_tags_is_still_a_lone_label(self, source, text, expected):
+        assert restore_line_break(text, source) == expected
 
 
 class TestLength:
@@ -82,12 +132,12 @@ class TestLength:
         assert restore_line_break(LONG) == "Ma ei tea,\nkas me jõuame täna õhtul koju tagasi"
 
     def test_never_splits_between_two_capitalised_words(self):
-        result = restore_line_break("Ma rääkisin eile õhtul pikalt Angel Bautista naisega kohvikus")
-        assert result == "Ma rääkisin eile õhtul pikalt\nAngel Bautista naisega kohvikus"
+        result = restore_line_break("Ma rääkisin eile õhtul pikalt Mardi Kuusepuu naisega kohvikus")
+        assert result == "Ma rääkisin eile õhtul pikalt\nMardi Kuusepuu naisega kohvikus"
 
     def test_moves_off_a_balanced_break_that_would_split_a_name(self):
-        result = restore_line_break("Ma rääkisin eile õhtul Angel Bautista naisega kohvikus pikalt")
-        assert result == "Ma rääkisin eile õhtul Angel Bautista\nnaisega kohvikus pikalt"
+        result = restore_line_break("Ma rääkisin eile õhtul Mardi Kuusepuu naisega kohvikus pikalt")
+        assert result == "Ma rääkisin eile õhtul Mardi Kuusepuu\nnaisega kohvikus pikalt"
 
     def test_does_not_split_straight_after_a_function_word(self):
         result = restore_line_break("Ta läks poodi leiba ostma ja jäi sinna terveks õhtuks pidama")
@@ -116,6 +166,12 @@ class TestLength:
     def test_skips_a_tag_space_even_when_it_is_the_best_balance(self):
         tagged = f'{"a" * 30}<font color="#ffffff">{"b" * 20}</font>'
         assert restore_line_break(f"{tagged} ja") == f"{tagged}\nja"
+
+    def test_never_breaks_inside_a_brace_tag(self):
+        result = restore_line_break(
+            "Ma ei tea, kas me homme{\\pos(10, 20)} jõuame koju tagasi või mitte"
+        )
+        assert result == "Ma ei tea, kas me homme{\\pos(10, 20)}\njõuame koju tagasi või mitte"
 
 
 def test_leaves_already_multiline_text_unchanged():

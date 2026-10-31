@@ -168,6 +168,34 @@ class TestTranslate:
             CodexClient("codex").translate("system", "user")
         assert not isinstance(exc.value, QuotaExhausted)
 
+    @pytest.mark.parametrize("stream", ["stderr", "stdout"])
+    def test_a_prompt_printed_back_is_not_a_quota_error(self, mocker, stream):
+        # The real codex prints the whole prompt to stderr, and subtitles can say "quota".
+        output = "user\nsystem\n\n[1] The quota is gone.\nERROR: stream disconnected"
+
+        def run(cmd, **kwargs):
+            streams = {"stdout": "", "stderr": "", stream: output}
+            return subprocess.CompletedProcess(cmd, 1, streams["stdout"], streams["stderr"])
+
+        mocker.patch("mkv_subtitle_translator.backends.subprocess.run", side_effect=run)
+
+        with pytest.raises(RuntimeError, match="stream disconnected") as exc:
+            CodexClient("codex").translate("system", "[1] The quota is gone.")
+
+        assert not isinstance(exc.value, QuotaExhausted)
+        assert "quota" not in str(exc.value)
+
+    def test_a_quota_error_below_the_printed_prompt_still_counts(self, mocker):
+        mocker.patch(
+            "mkv_subtitle_translator.backends.subprocess.run",
+            side_effect=_fake_run(
+                returncode=1, stderr="user\nsystem\n\n[1] Hi\nERROR: You've hit your usage limit"
+            ),
+        )
+
+        with pytest.raises(QuotaExhausted):
+            CodexClient("codex").translate("system", "[1] Hi")
+
 
 class TestEffortOverride:
     def test_a_call_can_override_the_codex_effort(self, mocker):
@@ -227,7 +255,7 @@ class TestClaudeTranslate:
         assert cmd[:2] == ["claude", "-p"]
         assert cmd[cmd.index("--model") + 1] == "opus"
         assert cmd[cmd.index("--effort") + 1] == "max"
-        assert cmd[cmd.index("--system-prompt") + 1] == "system"
+        assert cmd[cmd.index("--system-prompt") + 1] == b"system"
         assert run.call_args.kwargs["input"] == "user"
 
     def test_error_result_raises(self, mocker):
