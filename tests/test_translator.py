@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import threading
+import time
+
 import pytest
 
 from mkv_subtitle_translator.backends import (
@@ -158,6 +161,10 @@ class TestTranslateChunk:
 
 
 class TestBatchTranslate:
+    @pytest.fixture(autouse=True)
+    def _one_call_at_a_time(self, mocker):
+        mocker.patch("mkv_subtitle_translator.translator.CLI_WORKERS", 1)
+
     def test_announces_batch_before_waiting_for_translation(self, mocker, capsys):
         translator = OpenRouterTranslator("", "codex")
         subtitles = [Subtitle(index=str(i), timestamp="t", text="Hi") for i in (10, 20, 30)]
@@ -268,6 +275,80 @@ class TestBatchTranslate:
 
         assert [s.translated_text for s in subtitles] == ["Üks", "Kaks"]
         assert translator.stats.completed == 2
+
+
+class TestParallelBatches:
+    def test_runs_five_calls_at_once_on_a_cli_backend(self, mocker):
+        translator = OpenRouterTranslator("", "codex")
+        subtitles = [Subtitle(index=str(i), timestamp="t", text="Hi") for i in range(1, 6)]
+        barrier = threading.Barrier(5)
+
+        def translate(system, user, **kwargs):
+            barrier.wait(timeout=5)  # breaks unless all five are in flight together
+            return "\n".join(f"[{i}] Tere" for i in range(1, 6)), 0, 0
+
+        mocker.patch.object(translator.client, "translate", side_effect=translate)
+        translator.translate_subtitles(subtitles, chunk_size=1)
+
+        assert translator.stats.completed == 5
+
+    def test_calls_the_api_one_at_a_time(self, mocker):
+        translator = OpenRouterTranslator("dummy-key", "gpt-5.4")
+        subtitles = [Subtitle(index=str(i), timestamp="t", text="Hi") for i in range(1, 4)]
+        lock = threading.Lock()
+        running = peak = 0
+
+        def translate(system, user, **kwargs):
+            nonlocal running, peak
+            with lock:
+                running += 1
+                peak = max(peak, running)
+            time.sleep(0.02)
+            with lock:
+                running -= 1
+            return "\n".join(f"[{i}] Tere" for i in range(1, 4)), 1, 1
+
+        mocker.patch.object(translator.client, "translate", side_effect=translate)
+        translator.translate_subtitles(subtitles, chunk_size=1)
+
+        assert peak == 1
+        assert translator.stats.input_tokens == 3
+
+    def test_each_batch_keeps_its_own_text_when_a_later_batch_finishes_first(self, mocker):
+        translator = OpenRouterTranslator("", "codex")
+        subtitles = [Subtitle(index=str(i), timestamp="t", text=f"Line {i}") for i in (1, 2)]
+        second_done = threading.Event()
+
+        def translate(system, user, **kwargs):
+            if "Estonian translation.\n\n[2] Line 2" in user:
+                second_done.set()
+                return "[2] Kaks", 0, 0
+            assert second_done.wait(5)
+            return "[1] Üks", 0, 0
+
+        mocker.patch.object(translator.client, "translate", side_effect=translate)
+        translator.translate_subtitles(subtitles, chunk_size=1)
+
+        assert [s.translated_text for s in subtitles] == ["Üks", "Kaks"]
+
+    @pytest.mark.parametrize("error", [QuotaExhausted("dry"), KeyboardInterrupt()])
+    def test_a_stop_cancels_calls_not_yet_started(self, mocker, error):
+        translator = OpenRouterTranslator("", "codex")
+        subtitles = [Subtitle(index=str(i), timestamp="t", text="Hi") for i in range(1, 13)]
+        first = threading.Lock()
+
+        def translate(system, user, **kwargs):
+            if first.acquire(blocking=False):
+                raise error
+            time.sleep(0.05)
+            return "", 0, 0
+
+        translate_mock = mocker.patch.object(translator.client, "translate", side_effect=translate)
+
+        with pytest.raises(type(error)):
+            translator.translate_subtitles(subtitles, chunk_size=1)
+
+        assert translate_mock.call_count < 12
 
 
 class TestChunkSizeDefault:

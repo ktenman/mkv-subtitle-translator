@@ -16,22 +16,32 @@ LOG_INTERVAL = 15.0
 class BatchProgress:
     """Keep synchronous requests visible without guessing their completion rate."""
 
-    def __init__(self, total: int, batches: int):
+    def __init__(
+        self,
+        total: int,
+        batches: int,
+        *,
+        stage: str = "Translating",
+        label: str = "Batch",
+        done: str = "translated",
+    ):
         self.total = total
         self.batches = batches
         self.completed = 0
         self.failed = 0
+        self._label = label
+        self._done = done
         self._stream = sys.stderr
         self._terminal = self._stream.isatty()
         self._lock = threading.Lock()
         self._stop = threading.Event()
-        self._active = False
-        self._number = 0
-        self._started = 0.0
+        self._running: dict[int, float] = {}
+        self._finished = 0
+        self._started = time.monotonic()
         self._status = ""
         self._bar = tqdm(
             total=total,
-            desc="Translating",
+            desc=stage,
             unit="sub",
             file=self._stream,
             disable=not self._terminal,
@@ -61,17 +71,20 @@ class BatchProgress:
         else:
             print(message, file=self._stream, flush=True)
 
-    def _elapsed(self) -> str:
-        return tqdm.format_interval(max(0, time.monotonic() - self._started))
+    def _elapsed(self, since: float) -> str:
+        return tqdm.format_interval(max(0, time.monotonic() - since))
 
     def _counts(self) -> str:
         return (
             f"{self.completed + self.failed}/{self.total} processed; "
-            f"{self.completed} translated, {self.failed} failed"
+            f"{self.completed} {self._done}, {self.failed} failed"
         )
 
     def _refresh(self) -> None:
-        status = f"Batch {self._number}/{self.batches} | {self._elapsed()} elapsed | {self._status}"
+        status = (
+            f"{self._finished}/{self.batches} batches done, {len(self._running)} running | "
+            f"{self._elapsed(self._started)} elapsed | {self._status}"
+        )
         if self._terminal:
             self._bar.set_postfix_str(status)
         else:
@@ -81,38 +94,37 @@ class BatchProgress:
         interval = TERMINAL_INTERVAL if self._terminal else LOG_INTERVAL
         while not self._stop.wait(interval):
             with self._lock:
-                if self._active:
+                if self._running:
                     self._refresh()
 
     def start_batch(self, number: int, indices: tuple[str, str], size: int, model: str) -> None:
         with self._lock:
-            self._number = number
-            self._started = time.monotonic()
+            self._running[number] = time.monotonic()
             self._status = "Preparing request"
-            self._active = True
             self._write(
-                f"Batch {number}/{self.batches}: subtitles {indices[0]}-{indices[1]} "
+                f"{self._label} {number}/{self.batches}: subtitles {indices[0]}-{indices[1]} "
                 f"({size} subtitles) | {model}"
             )
             self._refresh()
 
-    def report(self, message: str) -> None:
+    def report(self, number: int, message: str) -> None:
         with self._lock:
             self._status = message
             if self._terminal:
-                self._write(f"Batch {self._number}/{self.batches}: {message}")
+                self._write(f"{self._label} {number}/{self.batches}: {message}")
             self._refresh()
 
-    def finish_batch(self, completed: int, failed: int) -> None:
+    def finish_batch(self, number: int, completed: int, failed: int) -> None:
         with self._lock:
             self.completed += completed
             self.failed += failed
-            self._active = False
-            self._status = f"{self.completed} translated, {self.failed} failed"
+            started = self._running.pop(number)
+            self._finished += 1
+            self._status = f"{self.completed} {self._done}, {self.failed} failed"
             self._bar.update(completed + failed)
             if self._terminal:
                 self._refresh()
             self._write(
-                f"Batch {self._number}/{self.batches} finished in {self._elapsed()}: "
-                f"{completed} translated, {failed} failed | {self._counts()}"
+                f"{self._label} {number}/{self.batches} finished in {self._elapsed(started)}: "
+                f"{completed} {self._done}, {failed} failed | {self._counts()}"
             )

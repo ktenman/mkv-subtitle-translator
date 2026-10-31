@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -13,6 +16,7 @@ from mkv_subtitle_translator.backends import (
     QuotaExhausted,
     build_chain,
 )
+from mkv_subtitle_translator.client import OpenRouterClient
 
 
 def _fake_run(reply: str = "Tere", returncode: int = 0, stderr: str = ""):
@@ -276,6 +280,47 @@ class TestFallbackClient:
 
         with pytest.raises(QuotaExhausted):
             chain.translate("s", "u")
+
+    def test_two_calls_failing_together_advance_the_chain_once(self):
+        barrier = threading.Barrier(2)
+
+        class Dry(_StubClient):
+            def translate(self, *args, **kwargs):
+                barrier.wait(timeout=5)
+                return super().translate(*args, **kwargs)
+
+        first = Dry("first")
+        second, third = _StubClient("second", "Tere"), _StubClient("third", "Vale")
+        chain = FallbackClient([first, second, third])
+
+        with ThreadPoolExecutor(2) as pool:
+            replies = list(pool.map(lambda _: chain.translate("s", "u"), range(2)))
+
+        assert [reply[0] for reply in replies] == ["Tere", "Tere"]
+        assert chain.clients == [second, third]
+
+    def test_api_backend_reached_by_the_chain_runs_one_call_at_a_time(self, mocker):
+        api = OpenRouterClient("sk-key", "gpt-5.6-sol")
+        lock = threading.Lock()
+        running = peak = 0
+
+        def translate(*args, **kwargs):
+            nonlocal running, peak
+            with lock:
+                running += 1
+                peak = max(peak, running)
+            time.sleep(0.02)
+            with lock:
+                running -= 1
+            return "Tere", 1, 1
+
+        mocker.patch.object(api, "translate", side_effect=translate)
+        chain = FallbackClient([api])
+
+        with ThreadPoolExecutor(5) as pool:
+            list(pool.map(lambda _: chain.translate("s", "u"), range(5)))
+
+        assert peak == 1
 
 
 class TestBuildChain:

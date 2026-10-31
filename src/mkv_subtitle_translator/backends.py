@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 from mkv_subtitle_translator.client import OpenRouterClient
@@ -17,6 +18,7 @@ DEFAULT_EFFORT = "max"
 # payload, and takes 10s+, so translate in far bigger batches than the API path.
 DEFAULT_BATCH_SIZE = 200
 API_CHUNK_SIZE = 50
+CLI_WORKERS = 5
 
 CLAUDE_MODEL = "claude"
 CLAUDE_EFFORT = "max"
@@ -223,6 +225,8 @@ class FallbackClient:
 
     def __init__(self, clients: list):
         self.clients = list(clients)
+        self._lock = threading.Lock()
+        self._api_lock = threading.Lock()
 
     @property
     def model_config(self) -> dict:
@@ -234,17 +238,24 @@ class FallbackClient:
         if progress:
             kwargs["progress"] = progress
         while True:
+            client = self.clients[0]
             try:
-                return self.clients[0].translate(*args, **kwargs)
+                if isinstance(client, OpenRouterClient):
+                    with self._api_lock:
+                        return client.translate(*args, **kwargs)
+                return client.translate(*args, **kwargs)
             except QuotaExhausted:
-                if len(self.clients) == 1:
-                    raise
-                self.clients.pop(0)
-                message = f"Out of credits - switching to {self.model_config['name']}"
-                if progress:
-                    progress(message)
-                else:
-                    print(f"\n{message}")
+                with self._lock:
+                    # Another call that failed at the same time may already have moved on.
+                    if self.clients[0] is client:
+                        if len(self.clients) == 1:
+                            raise
+                        self.clients.pop(0)
+                        message = f"Out of credits - switching to {self.model_config['name']}"
+                        if progress:
+                            progress(message)
+                        else:
+                            print(f"\n{message}")
 
     def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
         return self.clients[0].estimate_cost(input_tokens, output_tokens)

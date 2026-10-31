@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import concurrent.futures
+import functools
 import re
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime
 
 from tqdm import tqdm
@@ -11,6 +13,7 @@ from tqdm import tqdm
 from mkv_subtitle_translator.analyzer import SubtitleAnalyzer
 from mkv_subtitle_translator.backends import (
     API_CHUNK_SIZE,
+    CLI_WORKERS,
     DEFAULT_BATCH_SIZE,
     DEFAULT_EFFORT,
     QuotaExhausted,
@@ -261,12 +264,7 @@ Preserve any formatting or emphasis from the original."""
         print(f"Translating {len(subtitles)} subtitles in batches of {batch_size}")
         print(f"{'=' * 60}", flush=True)
 
-        batches = len(range(0, len(subtitles), batch_size))
-
-        with BatchProgress(total=len(subtitles), batches=batches) as progress:
-            self._translate_batches(
-                subtitles, batch_size, source_name, term_sheet, max_output, progress
-            )
+        self._translate_batches(subtitles, batch_size, source_name, term_sheet, max_output)
 
         self.stats.end_time = datetime.now()
         self.stats.estimated_cost = self.client.estimate_cost(
@@ -275,6 +273,24 @@ Preserve any formatting or emphasis from the original."""
         self._print_stats()
         return subtitles
 
+    def _run_batches(self, batches: list[list[Subtitle]], call: Callable, finish: Callable) -> None:
+        """Run call(number, batch) on workers, 5 at a time on a CLI backend, and
+        finish(number, batch, future) here. Only this thread touches self.stats.
+        Any exception, Ctrl+C included, cancels what has not started."""
+        workers = CLI_WORKERS if uses_cli(self.model) else 1
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(call, number, batch): (number, batch)
+                for number, batch in enumerate(batches, 1)
+            }
+            try:
+                for future in concurrent.futures.as_completed(futures):
+                    finish(*futures[future], future)
+            except BaseException:
+                for future in futures:
+                    future.cancel()
+                raise
+
     def _translate_batches(
         self,
         subtitles: list[Subtitle],
@@ -282,38 +298,41 @@ Preserve any formatting or emphasis from the original."""
         source_name: str,
         term_sheet: str,
         max_output: int,
-        progress: BatchProgress,
     ) -> None:
-        for batch_idx, start in enumerate(range(0, len(subtitles), batch_size)):
-            batch = subtitles[start : start + batch_size]
-            end = start + len(batch)
+        batches = [subtitles[i : i + batch_size] for i in range(0, len(subtitles), batch_size)]
+
+        def call(number: int, batch: list[Subtitle]) -> tuple[str, int, int]:
             progress.start_batch(
-                batch_idx + 1,
+                number,
                 (batch[0].index, batch[-1].index),
                 len(batch),
                 self.client.model_config["name"],
             )
+            start = (number - 1) * batch_size
+            end = start + len(batch)
+            user_prompt = batch_prompt(
+                source_name,
+                term_sheet,
+                subtitles[max(0, start - self.context_window_size) : start],
+                batch,
+                subtitles[end : end + self.context_window_size],
+            )
+
+            # 16K tokens is enough for 200 subs (~80 tokens each with overhead)
+            est_output_tokens = min(len(batch) * 80, max_output)
+
+            return self.client.translate(
+                BATCH_SYSTEM_PROMPT,
+                user_prompt,
+                max_tokens=est_output_tokens,
+                progress=functools.partial(progress.report, number),
+            )
+
+        def finish(number: int, batch: list[Subtitle], future: concurrent.futures.Future) -> None:
             completed_before = self.stats.completed
             failed_before = self.stats.failed
             try:
-                user_prompt = batch_prompt(
-                    source_name,
-                    term_sheet,
-                    subtitles[max(0, start - self.context_window_size) : start],
-                    batch,
-                    subtitles[end : end + self.context_window_size],
-                )
-
-                # 16K tokens is enough for 200 subs (~80 tokens each with overhead)
-                est_output_tokens = min(len(batch) * 80, max_output)
-
-                translated_text, input_tokens, output_tokens = self.client.translate(
-                    BATCH_SYSTEM_PROMPT,
-                    user_prompt,
-                    max_tokens=est_output_tokens,
-                    progress=progress.report,
-                )
-
+                translated_text, input_tokens, output_tokens = future.result()
                 translations = _parse_numbered(translated_text)
 
                 # Apply translations
@@ -333,14 +352,19 @@ Preserve any formatting or emphasis from the original."""
                 # Every backend is dry - keep going and we'd write English as Estonian.
                 raise
             except Exception as e:
-                progress.report(f"Error: {e}")
+                progress.report(number, f"Error: {e}")
                 for sub in batch:
                     if not sub.translated_text:
                         sub.translated_text = sub.text
                         self.stats.failed += 1
             progress.finish_batch(
-                self.stats.completed - completed_before, self.stats.failed - failed_before
+                number,
+                self.stats.completed - completed_before,
+                self.stats.failed - failed_before,
             )
+
+        with BatchProgress(total=len(subtitles), batches=len(batches)) as progress:
+            self._run_batches(batches, call, finish)
 
     def translate_subtitles(
         self,
