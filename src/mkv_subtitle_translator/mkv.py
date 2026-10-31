@@ -70,6 +70,10 @@ def extract_best_subtitle_from_mkv(mkv_file: str) -> str | None:
     analyzer = SubtitleAnalyzer()
 
     for i, stream in enumerate(streams):
+        # A merged video holds our own Estonian track, which can outsize an untagged source.
+        if stream.get("tags", {}).get("language", "").lower() in ["est", "et", "estonian"]:
+            continue
+
         temp_file = os.path.join(temp_dir, f"subtitle_{i}.srt")
 
         if extract_subtitle_from_mkv(mkv_file, i, temp_file):

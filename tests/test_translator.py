@@ -493,6 +493,17 @@ class TestEnglishNeverPassesAsEstonian:
 
         assert not out.exists()
 
+    @pytest.mark.parametrize("reply", ["", '""'])
+    def test_an_empty_reply_on_a_per_line_model_writes_nothing(self, mocker, tmp_path, reply):
+        translator = OpenRouterTranslator("dummy-key", "gpt-5.4-pro")
+        mocker.patch.object(translator.client, "translate", return_value=(reply, 0, 0))
+        out = tmp_path / "show.et.srt"
+
+        with pytest.raises(TranslationFailed, match="3 of 3 subtitles"):
+            translator.translate_file(_cues(), str(out), source_name="show.srt")
+
+        assert not out.exists()
+
     def test_a_few_dropped_cues_keep_the_file(self, mocker, tmp_path):
         translator = OpenRouterTranslator("", "codex")
         reply = "\n".join(f"[{n}] Tere" for n in range(1, 199))
@@ -732,6 +743,17 @@ class TestErrorCheck:
         translator.translate_file(_cues(), str(tmp_path / "show.et.srt"), source_name="show.srt")
 
         assert write.call_count == 1
+
+    def test_a_check_that_repeats_the_english_changes_nothing(self, mocker, tmp_path):
+        translator = OpenRouterTranslator("", "codex")
+        mocker.patch.object(
+            translator.client, "translate", side_effect=_backend(check="[2] Line 2")
+        )
+        out = tmp_path / "show.et.srt"
+
+        translator.translate_file(_cues(), str(out), source_name="show.srt")
+
+        assert "Line 2" not in out.read_text(encoding="utf-8-sig")
 
     def test_cue_outside_the_batch_is_not_applied(self, mocker, tmp_path):
         translator = OpenRouterTranslator("", "codex")

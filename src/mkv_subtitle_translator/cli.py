@@ -289,8 +289,8 @@ def _main(
             console.print(f"[red]Error: Invalid directory: {path}[/red]")
             raise typer.Exit(1)
 
-        srt_files = set(glob.glob(os.path.join(path, "*.extracted.srt")))
-        for mkv in glob.glob(os.path.join(path, "*.mkv")):
+        srt_files = set(glob.glob(os.path.join(glob.escape(path), "*.extracted.srt")))
+        for mkv in glob.glob(os.path.join(glob.escape(path), "*.mkv")):
             # A merge that never finished leaves episode.mkv.temp.mkv behind.
             if mkv.endswith(".mkv.temp.mkv"):
                 continue
@@ -308,6 +308,7 @@ def _main(
 
     # Built once so a backend that ran dry stays dropped across files.
     translator = OpenRouterTranslator(resolved_api_key, model, effort)
+    not_finished: list[str] = []
 
     for input_file in files_to_translate:
         output_file = input_file.replace(".extracted.srt", ".et.srt")
@@ -348,9 +349,11 @@ def _main(
             console.print("Nothing written - top up or set OPENROUTER_API_KEY and re-run.")
             raise typer.Exit(1) from e
         except TranslationFailed as e:
+            # One bad video must not hold back the rest of a folder.
             console.print(f"\n[red]{e}[/red]")
-            console.print("Nothing written - fix the errors above and re-run.")
-            raise typer.Exit(1) from e
+            print(f"{Path(output_file).name} not written")
+            not_finished.append(Path(input_file).name)
+            continue
 
         print(f"✅ Saved to: {output_file}")
 
@@ -361,8 +364,15 @@ def _main(
 
         for mkv, subs in mkv_to_subs_map.items():
             existing_subs = [s for s in subs if os.path.exists(s)]
-            if existing_subs:
-                merge_subtitles_into_mkv(mkv, existing_subs, backup=not no_backup)
+            if not existing_subs:
+                continue
+            if not merge_subtitles_into_mkv(mkv, existing_subs, backup=not no_backup):
+                not_finished.append(Path(mkv).name)
+
+    if not_finished:
+        print(f"\nNot finished: {', '.join(not_finished)}")
+        print("Fix the errors above and run the same command again.")
+        raise typer.Exit(1)
 
     print(f"\n{'=' * 60}")
     print("ALL TRANSLATIONS COMPLETE")
