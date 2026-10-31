@@ -33,12 +33,16 @@ mkv-subtitle-translator -f episode.mkv
 It prints this, shortened here:
 
 ```text
+Input: episode.mkv
+Model: GPT-6 Astra (Codex CLI), max effort (high for the term sheet)
+
 Extracting subtitles from episode.mkv
   Found 3 subtitle stream(s)
     Stream 0: eng - 845 bytes
   Detected as SDH subtitle (100.0% descriptions)
     Stream 1: eng - 403 bytes (SDH)
     Stream 2: ger - 211 bytes
+  Using stream 0
   ✓ Extracted to: episode.extracted.srt
 
 Processing: episode.extracted.srt
@@ -46,6 +50,7 @@ Found 12 unique subtitles
 Term sheet 1/1: subtitles 1-12 (12 subtitles) | GPT-6 Astra (Codex CLI)
 Term sheet 1/1 finished in 00:31: 1 written, 0 failed | 1/1 processed; 1 written, 0 failed
 Term sheet saved: episode.et.terms.md
+Term sheet in use: 16 lines, sent with every translation and check
 Batch 1/1: subtitles 1-12 (12 subtitles) | GPT-6 Astra (Codex CLI)
 Batch 1/1 finished in 01:03: 12 translated, 0 failed | 12/12 processed; 12 translated, 0 failed
 Check 1/1: subtitles 1-12 (12 subtitles) | GPT-6 Astra (Codex CLI)
@@ -253,6 +258,17 @@ mkv-subtitle-translator ~/Videos/season-2 --reference ~/Videos/season-1/s01e10.e
 
 # More than one reference: repeat the option
 mkv-subtitle-translator -f s02e01.mkv --reference s01e09.et.srt --reference s01e10.et.srt
+```
+
+The run shows that each reference was read and that the term sheet went into the later calls. The names it took from the reference are in `s02e01.et.terms.md`:
+
+```text
+Reference: s01e10.et.srt
+...
+Reference read: s01e10.et.srt (809 lines)
+...
+Term sheet saved: s02e01.et.terms.md
+Term sheet in use: 45 lines, sent with every translation and check
 ```
 
 Only a new term sheet reads the reference, so `--reference` is ignored while a term sheet exists. To use one on an episode you translated before, delete its term sheet first:

@@ -278,6 +278,14 @@ def _main(
         console.print("Get your key at: https://openrouter.ai/keys")
         raise typer.Exit(1)
 
+    config = SUBTITLE_MODELS[model]
+    print(f"Input: {file or path}")
+    is_codex = config.get("backend") == "codex"
+    effort_note = f", {effort} effort (high for the term sheet)" if is_codex else ""
+    print(f"Model: {config['name']}{effort_note}")
+    for reference_file in reference or []:
+        print(f"Reference: {reference_file}")
+
     files_to_translate: list[str] = []
     mkv_to_subs_map: dict[str, list[str]] = {}
 
