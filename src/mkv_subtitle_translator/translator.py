@@ -25,6 +25,7 @@ from mkv_subtitle_translator.models import (
     TranslationStats,
 )
 from mkv_subtitle_translator.progress import BatchProgress
+from mkv_subtitle_translator.prompts import BATCH_SYSTEM_PROMPT, batch_prompt
 
 # Openers mapped to the closers that count as a matching pair.
 _QUOTE_PAIRS = {'"': '"', "'": "'", "„": "“”", "“": "”", "«": "»"}
@@ -37,6 +38,16 @@ def strip_wrapping_quotes(text: str) -> str:
     if len(text) > 1 and text[-1] in _QUOTE_PAIRS.get(text[0], ""):
         return text[1:-1].strip()
     return text
+
+
+def _parse_numbered(text: str) -> dict[str, str]:
+    """Read the [number] lines of a model reply."""
+    parsed = {}
+    for line in text.split("\n"):
+        match = re.match(r"\[(\d+)\]\s*(.*)", line.strip())
+        if match:
+            parsed[match.group(1)] = strip_wrapping_quotes(match.group(2))
+    return parsed
 
 
 class OpenRouterTranslator:
@@ -229,7 +240,14 @@ Preserve any formatting or emphasis from the original."""
 
         return chunk
 
-    def _batch_translate(self, subtitles: list[Subtitle], batch_size: int = 300) -> list[Subtitle]:
+    def _batch_translate(
+        self,
+        subtitles: list[Subtitle],
+        batch_size: int = 300,
+        *,
+        source_name: str = "",
+        term_sheet: str = "",
+    ) -> list[Subtitle]:
         """Translate subtitles in large batches using models with big context windows.
         Sends many subtitles per API call for massive speed improvement."""
         self.stats = TranslationStats(total_subtitles=len(subtitles))
@@ -243,10 +261,12 @@ Preserve any formatting or emphasis from the original."""
         print(f"Translating {len(subtitles)} subtitles in batches of {batch_size}")
         print(f"{'=' * 60}", flush=True)
 
-        batches = [subtitles[i : i + batch_size] for i in range(0, len(subtitles), batch_size)]
+        batches = len(range(0, len(subtitles), batch_size))
 
-        with BatchProgress(total=len(subtitles), batches=len(batches)) as progress:
-            self._translate_batches(batches, max_output, progress)
+        with BatchProgress(total=len(subtitles), batches=batches) as progress:
+            self._translate_batches(
+                subtitles, batch_size, source_name, term_sheet, max_output, progress
+            )
 
         self.stats.end_time = datetime.now()
         self.stats.estimated_cost = self.client.estimate_cost(
@@ -256,9 +276,17 @@ Preserve any formatting or emphasis from the original."""
         return subtitles
 
     def _translate_batches(
-        self, batches: list[list[Subtitle]], max_output: int, progress: BatchProgress
+        self,
+        subtitles: list[Subtitle],
+        batch_size: int,
+        source_name: str,
+        term_sheet: str,
+        max_output: int,
+        progress: BatchProgress,
     ) -> None:
-        for batch_idx, batch in enumerate(batches):
+        for batch_idx, start in enumerate(range(0, len(subtitles), batch_size)):
+            batch = subtitles[start : start + batch_size]
+            end = start + len(batch)
             progress.start_batch(
                 batch_idx + 1,
                 (batch[0].index, batch[-1].index),
@@ -268,54 +296,25 @@ Preserve any formatting or emphasis from the original."""
             completed_before = self.stats.completed
             failed_before = self.stats.failed
             try:
-                # Build numbered list of subtitles
-                lines = []
-                for sub in batch:
-                    lines.append(f"[{sub.index}] {sub.text}")
-                subtitle_block = "\n".join(lines)
-
-                system_prompt = """You are an expert subtitle translator specializing in \
-English to Estonian translation.
-
-CRITICAL RULES:
-1. Translate ALL subtitles from English to Estonian
-2. Return ONLY the translations in the EXACT same format: [number] translated text
-3. Keep the [number] prefix exactly as given
-4. Do NOT skip any subtitle - translate every single one
-5. Do NOT add explanations, notes, or comments
-6. Terms of endearment (honey, dear, sweetheart, baby, darling) → Estonian \
-endearments (kallis, kullake, armas) NOT literal translations like "mesi"
-7. Use natural, conversational Estonian
-8. Translate idioms to Estonian equivalents, not literally
-9. Keep sound effects in brackets: [door slams] → [uks paugub]
-10. Preserve any formatting (italics, dashes for speaker changes)"""
-
-                user_prompt = f"""Translate all {len(batch)} subtitles below to Estonian. \
-Return each line as [number] Estonian translation.
-
-{subtitle_block}"""
+                user_prompt = batch_prompt(
+                    source_name,
+                    term_sheet,
+                    subtitles[max(0, start - self.context_window_size) : start],
+                    batch,
+                    subtitles[end : end + self.context_window_size],
+                )
 
                 # 16K tokens is enough for 200 subs (~80 tokens each with overhead)
                 est_output_tokens = min(len(batch) * 80, max_output)
 
                 translated_text, input_tokens, output_tokens = self.client.translate(
-                    system_prompt,
+                    BATCH_SYSTEM_PROMPT,
                     user_prompt,
                     max_tokens=est_output_tokens,
                     progress=progress.report,
                 )
 
-                # Parse response - match [number] translation lines
-                translations = {}
-                for line in translated_text.split("\n"):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    match = re.match(r"\[(\d+)\]\s*(.*)", line)
-                    if match:
-                        idx = match.group(1)
-                        trans = strip_wrapping_quotes(match.group(2))
-                        translations[idx] = trans
+                translations = _parse_numbered(translated_text)
 
                 # Apply translations
                 for sub in batch:
@@ -344,7 +343,13 @@ Return each line as [number] Estonian translation.
             )
 
     def translate_subtitles(
-        self, subtitles: list[Subtitle], chunk_size: int | None = None, max_workers: int = 8
+        self,
+        subtitles: list[Subtitle],
+        chunk_size: int | None = None,
+        max_workers: int = 8,
+        *,
+        source_name: str = "",
+        term_sheet: str = "",
     ) -> list[Subtitle]:
         """Translate subtitles - uses batch mode for large-context models"""
         if chunk_size is None:
@@ -352,7 +357,9 @@ Return each line as [number] Estonian translation.
 
         # Auto-detect batch mode for models that support it
         if self.client.model_config.get("supports_batch"):
-            return self._batch_translate(subtitles, batch_size=chunk_size)
+            return self._batch_translate(
+                subtitles, batch_size=chunk_size, source_name=source_name, term_sheet=term_sheet
+            )
 
         self.stats = TranslationStats(total_subtitles=len(subtitles))
         self.stats.start_time = datetime.now()

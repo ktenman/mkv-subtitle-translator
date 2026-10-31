@@ -233,6 +233,42 @@ class TestBatchTranslate:
 
         assert sub.translated_text is None
 
+    def test_each_batch_gets_english_neighbours_and_the_sheet(self, mocker):
+        translator = OpenRouterTranslator("", "codex")
+        subtitles = [Subtitle(index=str(i), timestamp="t", text=f"Line {i}") for i in range(1, 16)]
+        translate = mocker.patch.object(
+            translator.client, "translate", return_value=("[6] Rida", 0, 0)
+        )
+
+        translator.translate_subtitles(
+            subtitles, chunk_size=5, source_name="show.srt", term_sheet="Code -> kood"
+        )
+
+        prompt = translate.call_args_list[1].args[1]
+        assert "Term sheet:\nCode -> kood" in prompt
+        assert (
+            "earlier subtitles:\n[1] Line 1\n[2] Line 2\n[3] Line 3\n[4] Line 4\n[5] Line 5"
+            in prompt
+        )
+        assert (
+            "later subtitles:\n[11] Line 11\n[12] Line 12\n[13] Line 13\n[14] Line 14\n[15] Line 15"
+            in prompt
+        )
+
+    def test_context_cue_returned_by_the_model_is_ignored(self, mocker):
+        translator = OpenRouterTranslator("", "codex")
+        subtitles = [Subtitle(index=str(i), timestamp="t", text="Hi") for i in (1, 2)]
+        mocker.patch.object(
+            translator.client,
+            "translate",
+            side_effect=[("[1] Üks\n[2] Vale", 0, 0), ("[2] Kaks", 0, 0)],
+        )
+
+        translator.translate_subtitles(subtitles, chunk_size=1)
+
+        assert [s.translated_text for s in subtitles] == ["Üks", "Kaks"]
+        assert translator.stats.completed == 2
+
 
 class TestChunkSizeDefault:
     @pytest.mark.parametrize(
