@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import contextlib
 import functools
 import os
 import re
@@ -59,14 +60,23 @@ def terms_path(output_path: str) -> str:
     return output_path.removesuffix(".et.srt") + ".et.terms.md"
 
 
-def read_reference(path: str) -> str:
-    """Earlier subtitles as plain text. Older Estonian files are often Windows-1252."""
+def unchecked_path(output_path: str) -> str:
+    """Exists while a saved translation still needs its error check."""
+    return output_path.removesuffix(".et.srt") + ".et.unchecked"
+
+
+def _read_text(path: str | Path) -> str:
+    """Older Estonian files and ones edited by hand are often Windows-1252."""
     raw = Path(path).read_bytes()
     try:
-        text = raw.decode("utf-8-sig")
+        return raw.decode("utf-8-sig")
     except UnicodeDecodeError:
-        text = raw.decode("cp1252", errors="replace")
-    lines = (line.strip() for line in text.splitlines())
+        return raw.decode("cp1252", errors="replace")
+
+
+def read_reference(path: str) -> str:
+    """Earlier subtitles as plain text."""
+    lines = (line.strip() for line in _read_text(path).splitlines())
     return "\n".join(line for line in lines if line and not line.isdigit() and "-->" not in line)
 
 
@@ -413,11 +423,14 @@ Preserve any formatting or emphasis from the original."""
         """Read the saved sheet, or ask the model for one. Failure is not fatal: the
         batches still translate, only without shared terms."""
         path = Path(terms_path(output_path))
-        saved = path.read_text(encoding="utf-8").strip() if path.exists() else ""
+        saved = _read_text(path).strip() if path.exists() else ""
         if saved:
-            print(f"Reusing term sheet: {path}")
+            print(f"Reusing term sheet: {path}. Delete it to write a new one.")
             if references:
-                print("--reference files were not read because the term sheet already exists")
+                print(
+                    "--reference files were not read because the term sheet already exists. "
+                    "Delete it to use them."
+                )
             return saved
 
         reference_texts = [read_reference(reference) for reference in references]
@@ -455,11 +468,13 @@ Preserve any formatting or emphasis from the original."""
         return sheet
 
     def _check_errors(
-        self, subtitles: list[Subtitle], source_name: str, term_sheet: str, batch_size: int
-    ) -> int:
-        """Correct real errors and return how many cues changed. The file is already
-        written, so a failed check costs only the corrections it would have made."""
+        self, subtitles: list[Subtitle], output_path: str, source_name: str, term_sheet: str
+    ) -> bool:
+        """Correct real errors in the saved file and return whether every batch was checked.
+        A failed check costs only the corrections it would have made."""
         max_output = self.client.model_config.get("max_output", 65_536)
+        # Every call reads the whole title, so a smaller --chunk-size must not mean more calls.
+        batch_size = self._chunk_size(None)
         batches = [subtitles[i : i + batch_size] for i in range(0, len(subtitles), batch_size)]
         originals: dict[str, str] = {}
         checked = 0
@@ -502,25 +517,32 @@ Preserve any formatting or emphasis from the original."""
             checked += 1
             progress.finish_batch(number, len(batch), 0)
 
-        with BatchProgress(
-            total=len(subtitles),
-            batches=len(batches),
-            stage="Checking",
-            label="Check",
-            done="checked",
-        ) as progress:
-            try:
-                self._run_batches(batches, call, finish)
-            except QuotaExhausted as e:
-                print(f"Error check stopped: {e}")
-
-        print(f"Error check corrected {len(originals)} subtitles:")
-        for sub in subtitles:
-            if sub.index in originals:
-                print(f"  #{sub.index}: {originals[sub.index]} -> {sub.translated_text}")
-        if checked < len(batches):
-            print(f"{len(batches) - checked} of {len(batches)} batches could not be checked")
-        return len(originals)
+        try:
+            with BatchProgress(
+                total=len(subtitles),
+                batches=len(batches),
+                stage="Checking",
+                label="Check",
+                done="checked",
+            ) as progress:
+                try:
+                    self._run_batches(batches, call, finish)
+                except QuotaExhausted as e:
+                    print(f"Error check stopped: {e}")
+        finally:
+            # Ctrl+C lands here too, and it must not lose what the model already returned.
+            if originals:
+                self.write_srt(subtitles, output_path)
+            print(f"Error check corrected {len(originals)} subtitles{':' if originals else ''}")
+            for sub in subtitles:
+                if sub.index in originals:
+                    print(f"  #{sub.index}: {originals[sub.index]} -> {sub.translated_text}")
+            if checked < len(batches):
+                print(
+                    f"{len(batches) - checked} of {len(batches)} batches could not be checked. "
+                    "The translation is saved. Run the same command again to finish the check."
+                )
+        return checked == len(batches)
 
     def translate_file(
         self,
@@ -531,11 +553,18 @@ Preserve any formatting or emphasis from the original."""
         references: Sequence[str] = (),
         chunk_size: int | None = None,
         max_workers: int = 8,
+        check_only: bool = False,
     ) -> None:
-        """Run every stage for one file and write the result."""
+        """Run every stage for one file and write the result. With check_only, finish
+        the error check of the translation an earlier run saved."""
         chunk_size = self._chunk_size(chunk_size)
         self.stats = TranslationStats(total_subtitles=len(subtitles))
         self.stats.start_time = datetime.now()
+
+        # The longest name a run writes, so a long title fails before any credits are spent.
+        marker = Path(unchecked_path(output_path))
+        with contextlib.suppress(FileNotFoundError):
+            marker.stat()
 
         if references and not self.client.model_config.get("supports_batch"):
             print("--reference needs a batch model and was ignored")
@@ -545,17 +574,28 @@ Preserve any formatting or emphasis from the original."""
         if batch_mode:
             term_sheet = self._term_sheet(subtitles, source_name, output_path, references)
 
-        self.translate_subtitles(
-            subtitles, chunk_size, max_workers, source_name=source_name, term_sheet=term_sheet
-        )
-        # The next run skips a file that exists, so only a finished one may be written.
-        if self.stats.failed > len(subtitles) * MAX_FAILED_SHARE:
-            raise TranslationFailed(
-                f"{self.stats.failed} of {len(subtitles)} subtitles were not translated"
+        if check_only:
+            # ponytail: one marker per file, so finishing repeats the batches that passed.
+            # Save per-batch progress if a long title's check gets too slow to redo.
+            print(f"Finishing the error check of {output_path}")
+            saved = {sub.index: sub.text for sub in self.read_srt(output_path)}
+            for sub in subtitles:
+                sub.translated_text = saved.get(sub.index)
+            self.stats.cached = len(subtitles)
+        else:
+            self.translate_subtitles(
+                subtitles, chunk_size, max_workers, source_name=source_name, term_sheet=term_sheet
             )
-        self.write_srt(subtitles, output_path)
-        if batch_mode and self._check_errors(subtitles, source_name, term_sheet, chunk_size):
+            # The next run skips a file that exists, so only a finished one may be written.
+            if self.stats.failed > len(subtitles) * MAX_FAILED_SHARE:
+                raise TranslationFailed(
+                    f"{self.stats.failed} of {len(subtitles)} subtitles were not translated"
+                )
+            if batch_mode:
+                marker.touch()
             self.write_srt(subtitles, output_path)
+        if batch_mode and self._check_errors(subtitles, output_path, source_name, term_sheet):
+            marker.unlink(missing_ok=True)
 
         self.stats.end_time = datetime.now()
         self.stats.estimated_cost = self.client.estimate_cost(

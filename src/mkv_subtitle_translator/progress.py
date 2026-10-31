@@ -29,6 +29,7 @@ class BatchProgress:
         self.batches = batches
         self.completed = 0
         self.failed = 0
+        self._stage = stage
         self._label = label
         self._done = done
         self._stream = sys.stderr
@@ -62,7 +63,7 @@ class BatchProgress:
         self._bar.close()
         if exc_type is not None:
             action = "interrupted" if issubclass(exc_type, KeyboardInterrupt) else "stopped"
-            self._write(f"Translation {action}; {self._counts()}")
+            self._write(f"{self._stage} {action}; {self._counts()}")
 
     def _write(self, message: str) -> None:
         if self._terminal:

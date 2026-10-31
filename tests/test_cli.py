@@ -92,6 +92,77 @@ def test_translates_through_translate_file(tmp_path, mocker):
     assert translate_file.call_args.kwargs["source_name"] == "show.extracted.srt"
 
 
+def test_a_finished_translation_is_skipped(tmp_path, mocker):
+    srt = tmp_path / "show.extracted.srt"
+    srt.write_text(SRT, encoding="utf-8")
+    (tmp_path / "show.et.srt").touch()
+    translate_file = mocker.patch("mkv_subtitle_translator.cli.OpenRouterTranslator.translate_file")
+
+    result = runner.invoke(app, ["-f", str(srt), "--model", "codex"])
+
+    assert result.exit_code == 0
+    assert "output exists" in result.stdout
+    translate_file.assert_not_called()
+
+
+def test_an_unfinished_check_is_finished_instead_of_skipped(tmp_path, mocker):
+    srt = tmp_path / "show.extracted.srt"
+    srt.write_text(SRT, encoding="utf-8")
+    (tmp_path / "show.et.srt").touch()
+    (tmp_path / "show.et.unchecked").touch()
+    translate_file = mocker.patch("mkv_subtitle_translator.cli.OpenRouterTranslator.translate_file")
+
+    result = runner.invoke(app, ["-f", str(srt), "--model", "codex"])
+
+    assert result.exit_code == 0
+    assert translate_file.call_args.kwargs["check_only"] is True
+
+
+def test_force_translates_again_even_with_an_unfinished_check(tmp_path, mocker):
+    srt = tmp_path / "show.extracted.srt"
+    srt.write_text(SRT, encoding="utf-8")
+    (tmp_path / "show.et.srt").touch()
+    (tmp_path / "show.et.unchecked").touch()
+    translate_file = mocker.patch("mkv_subtitle_translator.cli.OpenRouterTranslator.translate_file")
+
+    result = runner.invoke(app, ["-f", str(srt), "--model", "codex", "--force"])
+
+    assert result.exit_code == 0
+    assert translate_file.call_args.kwargs["check_only"] is False
+
+
+def test_line_by_line_models_have_no_check_to_finish(tmp_path, mocker):
+    srt = tmp_path / "show.extracted.srt"
+    srt.write_text(SRT, encoding="utf-8")
+    (tmp_path / "show.et.srt").touch()
+    (tmp_path / "show.et.unchecked").touch()
+    translate_file = mocker.patch("mkv_subtitle_translator.cli.OpenRouterTranslator.translate_file")
+
+    result = runner.invoke(app, ["-f", str(srt), "--model", "gpt-5.4-pro", "--api-key", "key"])
+
+    assert result.exit_code == 0
+    translate_file.assert_not_called()
+
+
+@pytest.mark.parametrize("folder", [".", "season[/b]"])
+def test_a_name_too_long_to_save_is_a_clear_error(tmp_path, mocker, folder):
+    long_name = tmp_path / folder / f"{'a' * 244}.srt"
+    long_name.parent.mkdir(parents=True, exist_ok=True)
+    long_name.write_text(SRT, encoding="utf-8")
+    run = mocker.patch(
+        "mkv_subtitle_translator.backends.subprocess.run",
+        return_value=subprocess.CompletedProcess([], 1, "", "Not logged in"),
+    )
+
+    result = runner.invoke(app, ["-f", str(long_name)])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "too long" in result.stdout
+    assert "Not finished" in result.stdout
+    run.assert_not_called()
+
+
 def test_missing_reference_file_is_rejected():
     result = runner.invoke(app, ["--reference", "/no/such/file.srt", "--list-models"])
     assert result.exit_code != 0

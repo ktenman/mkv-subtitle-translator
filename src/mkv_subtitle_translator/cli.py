@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import subprocess
+import sys
 import urllib.error
 import urllib.request
 from importlib.metadata import version
@@ -15,6 +16,7 @@ from typing import Annotated
 import typer
 from packaging.version import Version
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from mkv_subtitle_translator.backends import (
@@ -31,6 +33,7 @@ from mkv_subtitle_translator.translator import (
     OpenRouterTranslator,
     TranslationFailed,
     deduplicate_subtitles,
+    unchecked_path,
 )
 
 logger = logging.getLogger(__name__)
@@ -227,12 +230,21 @@ def _main(
         int | None,
         typer.Option(
             "--chunk-size",
-            help=f"Chunk size (default: {DEFAULT_BATCH_SIZE} for CLIs, {API_CHUNK_SIZE} otherwise)",
+            help=(
+                f"Subtitles per translation call "
+                f"(default: {DEFAULT_BATCH_SIZE} for CLIs, {API_CHUNK_SIZE} otherwise)"
+            ),
             # Below 1, range() yields no batches and the English gets written as Estonian.
             min=1,
         ),
     ] = None,
-    max_workers: Annotated[int, typer.Option("--max-workers", help="Max parallel workers")] = 8,
+    max_workers: Annotated[
+        int,
+        typer.Option(
+            "--max-workers",
+            help="Parallel workers for line-by-line models. Other models ignore it",
+        ),
+    ] = 8,
     reference: Annotated[
         list[Path] | None,
         typer.Option(
@@ -315,7 +327,12 @@ def _main(
         if ".et.srt" not in output_file:
             output_file = output_file.replace(".srt", ".et.srt")
 
-        if not force and os.path.exists(output_file):
+        saved = not force and os.path.exists(output_file)
+        # A line-by-line model has no check to finish.
+        unchecked = SUBTITLE_MODELS[model].get("supports_batch") and os.path.exists(
+            unchecked_path(output_file)
+        )
+        if saved and not unchecked:
             print(f"\nSkipping {Path(input_file).name} - output exists")
             continue
 
@@ -343,14 +360,15 @@ def _main(
                 references=[str(path) for path in reference or []],
                 chunk_size=chunk_size,
                 max_workers=max_workers,
+                check_only=saved,
             )
         except QuotaExhausted as e:
             console.print(f"\n[red]{e}[/red]")
             console.print("Nothing written - top up or set OPENROUTER_API_KEY and re-run.")
             raise typer.Exit(1) from e
-        except TranslationFailed as e:
+        except (TranslationFailed, OSError) as e:
             # One bad video must not hold back the rest of a folder.
-            console.print(f"\n[red]{e}[/red]")
+            console.print(f"\n[red]{escape(str(e))}[/red]")
             print(f"{Path(output_file).name} not written")
             not_finished.append(Path(input_file).name)
             continue
@@ -380,6 +398,8 @@ def _main(
 
 
 def main() -> None:
+    # Subtitle text and the status marks must not stop a run on a stdout that can't show them.
+    sys.stdout.reconfigure(errors="backslashreplace")
     app()
 
 

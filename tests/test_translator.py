@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -25,6 +26,7 @@ from mkv_subtitle_translator.translator import (
     deduplicate_subtitles,
     read_reference,
     strip_wrapping_quotes,
+    unchecked_path,
 )
 
 SAMPLE_SRT = """1
@@ -615,6 +617,55 @@ class TestTermSheet:
 
         assert not out.exists()
 
+    def test_a_sheet_saved_as_windows_1252_is_read(self, mocker, tmp_path):
+        (tmp_path / "show.et.terms.md").write_bytes("Tüdruk -> plika\n".encode("cp1252"))
+        translator = OpenRouterTranslator("", "codex")
+        translate = mocker.patch.object(translator.client, "translate", side_effect=_backend())
+
+        translator.translate_file(_cues(1), str(tmp_path / "show.et.srt"), source_name="show.srt")
+
+        assert "Term sheet:\nTüdruk -> plika" in translate.call_args.args[1]
+
+    def test_the_bom_of_a_hand_edited_sheet_stays_out_of_the_prompt(self, mocker, tmp_path):
+        (tmp_path / "show.et.terms.md").write_text("Code -> kood\n", encoding="utf-8-sig")
+        translator = OpenRouterTranslator("", "codex")
+        translate = mocker.patch.object(translator.client, "translate", side_effect=_backend())
+
+        translator.translate_file(_cues(1), str(tmp_path / "show.et.srt"), source_name="show.srt")
+
+        assert "Term sheet:\nCode -> kood" in translate.call_args.args[1]
+
+    def test_a_reused_sheet_says_how_to_get_a_new_one(self, mocker, tmp_path, capsys):
+        (tmp_path / "show.et.terms.md").write_text("Code -> kood\n", encoding="utf-8")
+        translator = OpenRouterTranslator("", "codex")
+        mocker.patch.object(translator.client, "translate", side_effect=_backend())
+
+        translator.translate_file(_cues(1), str(tmp_path / "show.et.srt"), source_name="show.srt")
+
+        assert "Delete it to write a new one" in capsys.readouterr().out
+
+    def test_a_name_too_long_for_the_sheet_fails_before_any_call(self, mocker, tmp_path):
+        translator = OpenRouterTranslator("", "codex")
+        translate = mocker.patch.object(translator.client, "translate", side_effect=_backend())
+
+        with pytest.raises(OSError, match="too long"):
+            translator.translate_file(
+                _cues(1), str(tmp_path / f"{'a' * 244}.et.srt"), source_name="show.srt"
+            )
+
+        translate.assert_not_called()
+
+    def test_a_name_too_long_to_save_fails_before_any_paid_call(self, mocker, tmp_path):
+        translator = OpenRouterTranslator("dummy-key", "gpt-5.4-pro")
+        translate = mocker.patch.object(translator.client, "translate", return_value=("Tere", 1, 1))
+
+        with pytest.raises(OSError, match="too long"):
+            translator.translate_file(
+                _cues(1), str(tmp_path / f"{'a' * 245}.et.srt"), source_name="show.srt"
+            )
+
+        translate.assert_not_called()
+
     def test_per_line_models_get_no_sheet(self, mocker, tmp_path):
         translator = OpenRouterTranslator("dummy-key", "gpt-5.4-pro")
         translate = mocker.patch.object(translator.client, "translate", return_value=("Tere", 1, 1))
@@ -669,7 +720,7 @@ class TestReference:
 
     def test_reaches_only_the_sheet_prompt(self, mocker, tmp_path):
         reference = tmp_path / "old.srt"
-        reference.write_text("Tume Reisija", encoding="utf-8")
+        reference.write_text("Hall Rändur", encoding="utf-8")
         translator = OpenRouterTranslator("", "codex")
         translate = mocker.patch.object(translator.client, "translate", side_effect=_backend())
 
@@ -681,8 +732,8 @@ class TestReference:
         )
 
         first, *rest = [c.args[1] for c in translate.call_args_list]
-        assert "Earlier Estonian subtitles" in first and "Tume Reisija" in first
-        assert rest and all("Tume Reisija" not in prompt for prompt in rest)
+        assert "Earlier Estonian subtitles" in first and "Hall Rändur" in first
+        assert rest and all("Hall Rändur" not in prompt for prompt in rest)
 
     def test_is_not_read_when_a_sheet_exists_and_the_run_says_so(self, mocker, tmp_path, capsys):
         (tmp_path / "show.et.terms.md").write_text("Code -> kood\n", encoding="utf-8")
@@ -696,7 +747,9 @@ class TestReference:
             references=[str(tmp_path / "gone.srt")],
         )
 
-        assert "not read" in capsys.readouterr().out
+        output = capsys.readouterr().out
+        assert "not read" in output
+        assert "Delete it to use them" in output
 
     def test_per_line_models_say_it_was_ignored(self, mocker, tmp_path, capsys):
         translator = OpenRouterTranslator("dummy-key", "gpt-5.4-pro")
@@ -755,7 +808,48 @@ class TestErrorCheck:
 
         assert "Line 2" not in out.read_text(encoding="utf-8-sig")
 
+    def test_no_corrections_ends_without_a_colon(self, mocker, tmp_path, capsys):
+        translator = OpenRouterTranslator("", "codex")
+        mocker.patch.object(translator.client, "translate", side_effect=_backend())
+
+        translator.translate_file(_cues(), str(tmp_path / "show.et.srt"), source_name="show.srt")
+
+        assert "Error check corrected 0 subtitles\n" in capsys.readouterr().out
+
+    def test_corrections_are_saved_before_they_are_printed(self, mocker, tmp_path):
+        translator = OpenRouterTranslator("", "codex")
+        mocker.patch.object(
+            translator.client, "translate", side_effect=_backend(check="[2] Parandatud")
+        )
+        out = tmp_path / "show.et.srt"
+        real_print = print
+
+        def print_that_breaks_on_the_report(*args, **kwargs):
+            if "Error check corrected" in str(args):
+                raise UnicodeEncodeError("ascii", "õ", 0, 1, "not ascii")
+            real_print(*args, **kwargs)
+
+        mocker.patch("builtins.print", side_effect=print_that_breaks_on_the_report)
+
+        with pytest.raises(UnicodeEncodeError):
+            translator.translate_file(_cues(), str(out), source_name="show.srt")
+
+        assert "Parandatud" in out.read_text(encoding="utf-8-sig")
+
+    def test_chunk_size_does_not_multiply_the_check(self, mocker, tmp_path):
+        translator = OpenRouterTranslator("", "codex")
+        translate = mocker.patch.object(translator.client, "translate", side_effect=_backend())
+
+        translator.translate_file(
+            _cues(), str(tmp_path / "show.et.srt"), source_name="show.srt", chunk_size=1
+        )
+
+        stages = [c.args[0] for c in translate.call_args_list]
+        assert stages.count(BATCH_SYSTEM_PROMPT) == 3
+        assert stages.count(CHECK_SYSTEM_PROMPT) == 1
+
     def test_cue_outside_the_batch_is_not_applied(self, mocker, tmp_path):
+        mocker.patch("mkv_subtitle_translator.translator.DEFAULT_BATCH_SIZE", 1)
         translator = OpenRouterTranslator("", "codex")
         replies = {"[1] to [1]": "[2] Vale", "[2] to [2]": "NONE", "[3] to [3]": "NONE"}
 
@@ -765,7 +859,7 @@ class TestErrorCheck:
         mocker.patch.object(translator.client, "translate", side_effect=_backend(check=check))
         out = tmp_path / "show.et.srt"
 
-        translator.translate_file(_cues(), str(out), source_name="show.srt", chunk_size=1)
+        translator.translate_file(_cues(), str(out), source_name="show.srt")
 
         assert "Vale" not in out.read_text(encoding="utf-8-sig")
 
@@ -784,6 +878,7 @@ class TestErrorCheck:
         assert seen == [True]
 
     def test_batch_error_keeps_that_batch_and_is_counted(self, mocker, tmp_path, capsys):
+        mocker.patch("mkv_subtitle_translator.translator.DEFAULT_BATCH_SIZE", 1)
         translator = OpenRouterTranslator("", "codex")
 
         def check(user):
@@ -794,7 +889,7 @@ class TestErrorCheck:
         mocker.patch.object(translator.client, "translate", side_effect=_backend(check=check))
         out = tmp_path / "show.et.srt"
 
-        translator.translate_file(_cues(), str(out), source_name="show.srt", chunk_size=1)
+        translator.translate_file(_cues(), str(out), source_name="show.srt")
 
         assert "Parandatud" in out.read_text(encoding="utf-8-sig")
         assert "1 of 3 batches could not be checked" in capsys.readouterr().out
@@ -824,12 +919,11 @@ class TestErrorCheck:
         assert translator.stats.input_tokens == 30
 
     def test_every_check_call_reads_the_whole_title(self, mocker, tmp_path):
+        mocker.patch("mkv_subtitle_translator.translator.DEFAULT_BATCH_SIZE", 1)
         translator = OpenRouterTranslator("", "codex")
         translate = mocker.patch.object(translator.client, "translate", side_effect=_backend())
 
-        translator.translate_file(
-            _cues(), str(tmp_path / "show.et.srt"), source_name="show.srt", chunk_size=1
-        )
+        translator.translate_file(_cues(), str(tmp_path / "show.et.srt"), source_name="show.srt")
 
         checks = [c.args[1] for c in translate.call_args_list if c.args[0] == CHECK_SYSTEM_PROMPT]
         assert len(checks) == 3
@@ -842,6 +936,140 @@ class TestErrorCheck:
         translator.translate_file(_cues(1), str(tmp_path / "show.et.srt"), source_name="show.srt")
 
         assert translate.call_count == 1
+
+
+class TestUnfinishedCheck:
+    def _stopped_run(self, mocker, tmp_path, cues=None):
+        """Save a translation whose check never finished, as a crash would leave it."""
+        translator = OpenRouterTranslator("", "codex")
+        mocker.patch.object(
+            translator.client, "translate", side_effect=_backend(check=RuntimeError("offline"))
+        )
+        out = tmp_path / "show.et.srt"
+        translator.translate_file(cues or _cues(), str(out), source_name="show.srt")
+        return out
+
+    def test_a_finished_check_leaves_no_marker(self, mocker, tmp_path):
+        translator = OpenRouterTranslator("", "codex")
+        mocker.patch.object(translator.client, "translate", side_effect=_backend())
+        out = tmp_path / "show.et.srt"
+
+        translator.translate_file(_cues(), str(out), source_name="show.srt")
+
+        assert not Path(unchecked_path(str(out))).exists()
+
+    def test_the_marker_exists_as_soon_as_the_output_does(self, mocker, tmp_path):
+        translator = OpenRouterTranslator("", "codex")
+        out = tmp_path / "show.et.srt"
+        seen = []
+
+        def check(user):
+            seen.append(Path(unchecked_path(str(out))).exists())
+            return "NONE"
+
+        mocker.patch.object(translator.client, "translate", side_effect=_backend(check=check))
+        translator.translate_file(_cues(), str(out), source_name="show.srt")
+
+        assert seen == [True]
+
+    def test_a_failed_check_says_how_to_finish_it(self, mocker, tmp_path, capsys):
+        out = self._stopped_run(mocker, tmp_path)
+
+        assert Path(unchecked_path(str(out))).exists()
+        assert "Run the same command again to finish the check" in capsys.readouterr().out
+
+    def test_quota_leaves_the_check_unfinished(self, mocker, tmp_path):
+        translator = OpenRouterTranslator("", "codex")
+        mocker.patch.object(
+            translator.client, "translate", side_effect=_backend(check=QuotaExhausted("dry"))
+        )
+        out = tmp_path / "show.et.srt"
+
+        translator.translate_file(_cues(), str(out), source_name="show.srt")
+
+        assert Path(unchecked_path(str(out))).exists()
+
+    def test_ctrl_c_keeps_returned_corrections_and_says_how_to_finish(
+        self, mocker, tmp_path, capsys
+    ):
+        mocker.patch("mkv_subtitle_translator.translator.DEFAULT_BATCH_SIZE", 1)
+        translator = OpenRouterTranslator("", "codex")
+        cues = _cues(2)
+
+        def check(user):
+            if "[1] to [1]" in user:
+                return "[1] Parandatud"
+            deadline = time.monotonic() + 5
+            while cues[0].translated_text != "Parandatud" and time.monotonic() < deadline:
+                time.sleep(0.01)
+            raise KeyboardInterrupt
+
+        mocker.patch.object(translator.client, "translate", side_effect=_backend(check=check))
+        out = tmp_path / "show.et.srt"
+
+        with pytest.raises(KeyboardInterrupt):
+            translator.translate_file(cues, str(out), source_name="show.srt")
+
+        assert "Parandatud" in out.read_text(encoding="utf-8-sig")
+        assert Path(unchecked_path(str(out))).exists()
+        assert "Run the same command again to finish the check" in capsys.readouterr().out
+
+    def test_finishing_checks_the_saved_translation_without_translating(self, mocker, tmp_path):
+        out = self._stopped_run(mocker, tmp_path)
+        translator = OpenRouterTranslator("", "codex")
+        translate = mocker.patch.object(
+            translator.client, "translate", side_effect=_backend(check="[2] Parandatud")
+        )
+
+        translator.translate_file(_cues(), str(out), source_name="show.srt", check_only=True)
+
+        assert [c.args[0] for c in translate.call_args_list] == [CHECK_SYSTEM_PROMPT]
+        assert "[1] Tere\n[2] Tere\n[3] Tere" in translate.call_args.args[1]
+        text = out.read_text(encoding="utf-8-sig")
+        assert "Parandatud" in text and text.count("Tere") == 2
+        assert not Path(unchecked_path(str(out))).exists()
+
+    def test_finishing_keeps_the_layout_of_the_saved_lines(self, mocker, tmp_path):
+        def speakers():
+            return [
+                Subtitle(
+                    index="1",
+                    timestamp="t",
+                    text="- Are you? - No.",
+                    source_lines=("- Are you?", "- No."),
+                ),
+                Subtitle(index="2", timestamp="t", text="Line 2"),
+            ]
+
+        translator = OpenRouterTranslator("", "codex")
+        mocker.patch.object(
+            translator.client,
+            "translate",
+            side_effect=lambda system, user, **kwargs: (
+                ("[1] - Kas tuled? - Ei.\n[2] Tere", 0, 0)
+                if system == BATCH_SYSTEM_PROMPT
+                else _backend(check=RuntimeError("offline"))(system, user)
+            ),
+        )
+        out = tmp_path / "show.et.srt"
+        translator.translate_file(speakers(), str(out), source_name="show.srt")
+
+        finishing = OpenRouterTranslator("", "codex")
+        mocker.patch.object(
+            finishing.client, "translate", side_effect=_backend(check="[2] Parandatud")
+        )
+        finishing.translate_file(speakers(), str(out), source_name="show.srt", check_only=True)
+
+        assert "- Kas tuled?\n- Ei.\n" in out.read_text(encoding="utf-8-sig")
+
+    def test_line_by_line_models_leave_no_marker(self, mocker, tmp_path):
+        translator = OpenRouterTranslator("dummy-key", "gpt-5.4-pro")
+        mocker.patch.object(translator.client, "translate", return_value=("Tere", 1, 1))
+        out = tmp_path / "show.et.srt"
+
+        translator.translate_file(_cues(1), str(out), source_name="show.srt")
+
+        assert not Path(unchecked_path(str(out))).exists()
 
 
 class TestChunkSizeDefault:

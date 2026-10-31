@@ -125,6 +125,22 @@ def test_a_stage_can_rename_what_it_counts(mocker):
     assert "3/3 processed; 3 checked, 0 failed" in stream.getvalue()
 
 
+def test_an_interrupt_names_the_stage_it_stopped(mocker):
+    from mkv_subtitle_translator import progress
+
+    stream = ObservedStream()
+    mocker.patch.object(progress.sys, "stderr", stream)
+
+    with (
+        pytest.raises(KeyboardInterrupt),
+        progress.BatchProgress(total=3, batches=1, stage="Checking", done="checked"),
+    ):
+        raise KeyboardInterrupt
+
+    assert "Checking interrupted; 0/3 processed" in stream.getvalue()
+    assert "Translation" not in stream.getvalue()
+
+
 def test_finish_time_is_per_batch_and_the_timer_is_per_stage(mocker):
     from mkv_subtitle_translator import progress
 
