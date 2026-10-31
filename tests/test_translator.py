@@ -9,8 +9,10 @@ import pytest
 from mkv_subtitle_translator.backends import (
     API_CHUNK_SIZE,
     DEFAULT_BATCH_SIZE,
+    FallbackClient,
     QuotaExhausted,
 )
+from mkv_subtitle_translator.client import OpenRouterClient
 from mkv_subtitle_translator.models import Subtitle
 from mkv_subtitle_translator.prompts import (
     BATCH_SYSTEM_PROMPT,
@@ -115,6 +117,19 @@ class TestWriteSrt:
         out = tmp_path / "out.srt"
         translator.write_srt([sub], str(out))
         assert out.read_bytes().startswith(b"\xef\xbb\xbf")
+
+    def test_a_failed_write_leaves_the_previous_output_whole(self, tmp_path):
+        translator = OpenRouterTranslator("dummy-key")
+        good = Subtitle(index="1", timestamp="t", text="Hi", translated_text="Tere")
+        unwritable = Subtitle(index="2", timestamp="t", text="Hi", translated_text="\ud800")
+        out = tmp_path / "out.srt"
+        translator.write_srt([good], str(out))
+        finished = out.read_bytes()
+
+        with pytest.raises(UnicodeEncodeError):
+            translator.write_srt([unwritable, good], str(out))
+
+        assert out.read_bytes() == finished
 
 
 class TestStripWrappingQuotes:
@@ -357,6 +372,49 @@ class TestParallelBatches:
 
         assert translate_mock.call_count < 12
 
+    def test_ctrl_c_stops_workers_queued_for_the_paid_api(self, mocker):
+        translator = OpenRouterTranslator("", "codex")
+        api = OpenRouterClient("sk-key", "gpt-5.6-sol")
+        translator.client = FallbackClient([api])
+        subtitles = [Subtitle(index=str(i), timestamp="t", text="Hi") for i in range(1, 6)]
+        first = threading.Lock()
+
+        def translate(*args, **kwargs):
+            if first.acquire(blocking=False):
+                raise KeyboardInterrupt
+            translator.client.stopping.wait(5)  # this call was in flight when Ctrl+C landed
+            return "", 0, 0
+
+        translate_mock = mocker.patch.object(api, "translate", side_effect=translate)
+
+        with pytest.raises(KeyboardInterrupt):
+            translator.translate_subtitles(subtitles, chunk_size=1)
+
+        # The interrupted call, and at most the one that took the lock as Ctrl+C landed.
+        assert translate_mock.call_count <= 2
+
+    def test_ctrl_c_on_a_plain_api_model_reaches_the_caller(self, mocker):
+        translator = OpenRouterTranslator("dummy-key", "gpt-5.4")
+        mocker.patch.object(translator.client, "translate", side_effect=KeyboardInterrupt)
+
+        with pytest.raises(KeyboardInterrupt):
+            translator.translate_subtitles(_cues(1), chunk_size=1)
+
+    def test_a_quota_stop_leaves_the_paid_api_usable_for_the_next_file(self, mocker):
+        translator = OpenRouterTranslator("", "codex")
+        api = OpenRouterClient("sk-key", "gpt-5.6-sol")
+        translator.client = FallbackClient([api])
+        subtitles = _cues(1)
+        translate = mocker.patch.object(api, "translate", side_effect=QuotaExhausted("dry"))
+
+        with pytest.raises(QuotaExhausted):
+            translator.translate_subtitles(subtitles, chunk_size=1)
+        translate.side_effect = None
+        translate.return_value = ("[1] Tere", 0, 0)
+        translator.translate_subtitles(subtitles, chunk_size=1)
+
+        assert subtitles[0].translated_text == "Tere"
+
 
 def _backend(sheet="Code -> kood", check="NONE", tokens=(0, 0)):
     """Answer each stage's prompt. A stage is a reply, a function of the prompt or an exception."""
@@ -434,6 +492,29 @@ class TestTermSheet:
         assert "continuing without" in capsys.readouterr().out
         assert out.exists()
         assert not (tmp_path / "show.et.terms.md").exists()
+
+    def test_empty_reply_warns_and_saves_nothing(self, mocker, tmp_path, capsys):
+        translator = OpenRouterTranslator("", "codex")
+        translate = mocker.patch.object(
+            translator.client, "translate", side_effect=_backend(sheet="  ")
+        )
+
+        translator.translate_file(_cues(1), str(tmp_path / "show.et.srt"), source_name="show.srt")
+
+        assert "Term sheet:" not in translate.call_args.args[1]
+        assert "continuing without" in capsys.readouterr().out
+        assert not (tmp_path / "show.et.terms.md").exists()
+
+    def test_empty_saved_sheet_is_rebuilt(self, mocker, tmp_path, capsys):
+        translator = OpenRouterTranslator("", "codex")
+        saved = tmp_path / "show.et.terms.md"
+        saved.write_text("\n", encoding="utf-8")
+        mocker.patch.object(translator.client, "translate", side_effect=_backend())
+
+        translator.translate_file(_cues(1), str(tmp_path / "show.et.srt"), source_name="show.srt")
+
+        assert saved.read_text(encoding="utf-8").strip() == "Code -> kood"
+        assert "Reusing term sheet" not in capsys.readouterr().out
 
     def test_quota_raises_and_writes_nothing(self, mocker, tmp_path):
         translator = OpenRouterTranslator("", "codex")

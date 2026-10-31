@@ -230,6 +230,7 @@ class FallbackClient:
         self.clients = list(clients)
         self._lock = threading.Lock()
         self._api_lock = threading.Lock()
+        self.stopping = threading.Event()
 
     @property
     def model_config(self) -> dict:
@@ -245,6 +246,8 @@ class FallbackClient:
             try:
                 if isinstance(client, OpenRouterClient):
                     with self._api_lock:
+                        if self.stopping.is_set():
+                            raise RuntimeError("Stopped before this call started")
                         return client.translate(*args, **kwargs)
                 return client.translate(*args, **kwargs)
             except QuotaExhausted:

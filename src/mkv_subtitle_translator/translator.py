@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import functools
+import os
 import re
 import threading
 import time
@@ -17,6 +18,7 @@ from mkv_subtitle_translator.backends import (
     CLI_WORKERS,
     DEFAULT_BATCH_SIZE,
     DEFAULT_EFFORT,
+    FallbackClient,
     QuotaExhausted,
     build_chain,
     uses_cli,
@@ -303,7 +305,11 @@ Preserve any formatting or emphasis from the original."""
             try:
                 for future in concurrent.futures.as_completed(futures):
                     finish(*futures[future], future)
-            except BaseException:
+            except BaseException as error:
+                # Ctrl+C reaches only this thread, and cancel() can't stop a worker
+                # queued for the paid API. Only Ctrl+C, because it ends the process.
+                if isinstance(error, KeyboardInterrupt) and isinstance(self.client, FallbackClient):
+                    self.client.stopping.set()
                 for future in futures:
                     future.cancel()
                 raise
@@ -398,11 +404,12 @@ Preserve any formatting or emphasis from the original."""
         """Read the saved sheet, or ask the model for one. Failure is not fatal: the
         batches still translate, only without shared terms."""
         path = Path(terms_path(output_path))
-        if path.exists():
+        saved = path.read_text(encoding="utf-8").strip() if path.exists() else ""
+        if saved:
             print(f"Reusing term sheet: {path}")
             if references:
                 print("--reference files were not read because the term sheet already exists")
-            return path.read_text(encoding="utf-8").strip()
+            return saved
 
         reference_texts = [read_reference(reference) for reference in references]
         with BatchProgress(
@@ -422,6 +429,8 @@ Preserve any formatting or emphasis from the original."""
                     effort=TERM_SHEET_EFFORT,
                     progress=functools.partial(progress.report, 1),
                 )
+                if not sheet.strip():
+                    raise ValueError("the reply was empty")
             except QuotaExhausted:
                 raise
             except Exception as e:
@@ -606,11 +615,14 @@ Preserve any formatting or emphasis from the original."""
 
     def write_srt(self, subtitles: list[Subtitle], output_path: str):
         """Write translated subtitles to a new SRT file"""
-        with open(output_path, "w", encoding="utf-8-sig") as file:
+        # ponytail: a kill mid-write leaves the .tmp behind, and the next write replaces it.
+        temp_path = f"{output_path}.tmp"
+        with open(temp_path, "w", encoding="utf-8-sig") as file:
             for subtitle in subtitles:
                 text = _CURLY_QUOTES.sub('"', subtitle.translated_text or subtitle.text)
                 text = restore_line_break(text, subtitle.source_lines)
                 file.write(f"{subtitle.index}\n{subtitle.timestamp}\n{text}\n\n")
+        os.replace(temp_path, output_path)
 
 
 def deduplicate_subtitles(subtitles: list[Subtitle]) -> list[Subtitle]:
