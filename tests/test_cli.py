@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
+
 import pytest
 from typer.testing import CliRunner
 
@@ -7,6 +10,8 @@ from mkv_subtitle_translator.cli import app
 from mkv_subtitle_translator.models import DEFAULT_MODEL
 
 runner = CliRunner()
+
+SRT = "1\n00:00:01,000 --> 00:00:02,000\nHi\n\n"
 
 
 def test_help_shows_usage():
@@ -104,3 +109,93 @@ def test_reference_files_reach_translate_file(tmp_path, mocker):
 
     assert result.exit_code == 0
     assert translate_file.call_args.kwargs["references"] == [str(one), str(two)]
+
+
+def test_no_installed_backend_stops_with_the_install_hint(tmp_path, mocker, monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    srt = tmp_path / "show.extracted.srt"
+    srt.write_text(SRT, encoding="utf-8")
+    mocker.patch("mkv_subtitle_translator.backends.subprocess.run", side_effect=FileNotFoundError())
+
+    result = runner.invoke(app, ["-f", str(srt)])
+
+    assert result.exit_code == 1
+    assert "not found on PATH" in result.stdout
+    assert not (tmp_path / "show.et.srt").exists()
+
+
+def test_a_backend_that_fails_leaves_no_output_and_merges_nothing(tmp_path, mocker):
+    video = tmp_path / "show.mkv"
+    video.touch()
+    srt = tmp_path / "show.extracted.srt"
+    srt.write_text(SRT, encoding="utf-8")
+    mocker.patch(
+        "mkv_subtitle_translator.cli.extract_best_subtitle_from_mkv", return_value=str(srt)
+    )
+    mocker.patch(
+        "mkv_subtitle_translator.backends.subprocess.run",
+        return_value=subprocess.CompletedProcess([], 1, "", "Not logged in"),
+    )
+    merge = mocker.patch("mkv_subtitle_translator.cli.merge_subtitles_into_mkv")
+
+    result = runner.invoke(app, ["-f", str(video)])
+
+    assert result.exit_code == 1
+    assert "1 of 1 subtitles were not translated" in result.stdout
+    assert not (tmp_path / "show.et.srt").exists()
+    merge.assert_not_called()
+
+
+def _extract_to_disk(mocker):
+    def extract(mkv):
+        srt = Path(mkv).with_suffix(".extracted.srt")
+        srt.write_text(SRT, encoding="utf-8")
+        return str(srt)
+
+    return mocker.patch(
+        "mkv_subtitle_translator.cli.extract_best_subtitle_from_mkv", side_effect=extract
+    )
+
+
+def _outputs(translate_file):
+    return sorted(Path(call.args[1]).name for call in translate_file.call_args_list)
+
+
+def test_folder_run_adds_new_videos_to_the_ones_already_extracted(tmp_path, mocker):
+    (tmp_path / "old.mkv").touch()
+    (tmp_path / "old.extracted.srt").write_text(SRT, encoding="utf-8")
+    (tmp_path / "new.mkv").touch()
+    extract = _extract_to_disk(mocker)
+    translate_file = mocker.patch("mkv_subtitle_translator.cli.OpenRouterTranslator.translate_file")
+
+    result = runner.invoke(app, [str(tmp_path)])
+
+    assert result.exit_code == 0
+    extract.assert_called_once_with(str(tmp_path / "new.mkv"))
+    assert _outputs(translate_file) == ["new.et.srt", "old.et.srt"]
+
+
+def test_force_extracts_again_and_keeps_subtitles_with_no_video(tmp_path, mocker):
+    (tmp_path / "video.mkv").touch()
+    (tmp_path / "video.extracted.srt").write_text(SRT, encoding="utf-8")
+    (tmp_path / "lone.extracted.srt").write_text(SRT, encoding="utf-8")
+    extract = _extract_to_disk(mocker)
+    translate_file = mocker.patch("mkv_subtitle_translator.cli.OpenRouterTranslator.translate_file")
+
+    result = runner.invoke(app, [str(tmp_path), "--force"])
+
+    assert result.exit_code == 0
+    extract.assert_called_once_with(str(tmp_path / "video.mkv"))
+    assert _outputs(translate_file) == ["lone.et.srt", "video.et.srt"]
+
+
+def test_folder_run_ignores_a_merge_that_never_finished(tmp_path, mocker):
+    (tmp_path / "episode.mkv.temp.mkv").touch()
+    extract = _extract_to_disk(mocker)
+    translate_file = mocker.patch("mkv_subtitle_translator.cli.OpenRouterTranslator.translate_file")
+
+    result = runner.invoke(app, [str(tmp_path)])
+
+    assert "No files to translate" in result.stdout
+    extract.assert_not_called()
+    translate_file.assert_not_called()
