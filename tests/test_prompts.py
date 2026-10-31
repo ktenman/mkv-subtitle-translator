@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from mkv_subtitle_translator.models import Subtitle
-from mkv_subtitle_translator.prompts import BATCH_SYSTEM_PROMPT, batch_prompt
+from mkv_subtitle_translator.prompts import BATCH_SYSTEM_PROMPT, batch_prompt, check_prompt
 
 
 def _subs(*numbers):
@@ -37,3 +37,17 @@ def test_leaves_out_empty_sections():
     prompt = batch_prompt("show.srt", "", [], _subs(1), [])
     assert "Term sheet" not in prompt
     assert "Context only" not in prompt
+
+
+def test_check_prompt_carries_the_whole_title_and_the_range():
+    subs = _subs(1, 2, 3)
+    for sub in subs:
+        sub.translated_text = f"Rida {sub.index}"
+
+    prompt = check_prompt("show.srt", "Code -> kood", subs, subs[1:2])
+
+    assert "Term sheet:\nCode -> kood" in prompt
+    assert "Complete English source:\n[1] Line 1\n[2] Line 2\n[3] Line 3" in prompt
+    assert "Complete Estonian translation:\n[1] Rida 1\n[2] Rida 2\n[3] Rida 3" in prompt
+    assert "Check subtitles [2] to [2]." in prompt
+    assert "If none need correcting, return NONE." in prompt

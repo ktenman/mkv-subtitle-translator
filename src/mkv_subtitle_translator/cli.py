@@ -3,6 +3,7 @@ from __future__ import annotations
 import glob
 import json
 import logging
+import math
 import os
 import subprocess
 import urllib.error
@@ -34,6 +35,7 @@ GITHUB_REPO = "ktenman/mkv-subtitle-translator"
 
 SHEET_INPUT_PER_CUE = 12
 SHEET_OUTPUT_TOKENS = 1_000
+CHECK_INPUT_PER_CUE = 25
 
 app = typer.Typer(
     name="mkv-subtitle-translator",
@@ -126,7 +128,9 @@ def _estimated_tokens(cues: int, model: str) -> tuple[int, int]:
     total_input = cues * 150
     total_output = cues * 30
     if SUBTITLE_MODELS[model].get("supports_batch"):
+        size = DEFAULT_BATCH_SIZE if uses_cli(model) else API_CHUNK_SIZE
         total_input += cues * SHEET_INPUT_PER_CUE
+        total_input += math.ceil(cues / size) * cues * CHECK_INPUT_PER_CUE
         total_output += SHEET_OUTPUT_TOKENS
     return total_input, total_output
 

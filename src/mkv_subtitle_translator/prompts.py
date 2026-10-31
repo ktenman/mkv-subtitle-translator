@@ -35,6 +35,20 @@ term, insult or catchphrase -> one Estonian wording.
 Do not quote or suggest translations of whole lines. Do not cover song lyrics or sound labels. \
 Keep it under 400 words. No preamble."""
 
+CHECK_SYSTEM_PROMPT = """You are a senior Estonian subtitle reviser. You check a finished \
+translation against the English source and correct real errors. You do not restyle \
+correct lines."""
+
+_CHECK_RULES = """Correct a subtitle only if it has one of these:
+- meaning that differs from the English: wrong person, number, negation, tense or sense, or \
+something important left out
+- a name or term that differs from the term sheet
+- the wrong sina or teie
+- an Estonian grammar or spelling error
+
+Leave every other subtitle as it is. Do not improve style, change word choice or shorten.
+Return only the subtitles you correct, as [number] text. If none need correcting, return NONE."""
+
 
 def numbered(subtitles: list[Subtitle]) -> str:
     return "\n".join(f"[{sub.index}] {sub.text}" for sub in subtitles)
@@ -68,3 +82,19 @@ def term_sheet_prompt(source_name: str, subtitles: list[Subtitle], references: l
         sections.extend(references)
     sections.append(f"English episode:\n{numbered(subtitles)}")
     return "\n\n".join(sections)
+
+
+def check_prompt(
+    source_name: str, term_sheet: str, subtitles: list[Subtitle], batch: list[Subtitle]
+) -> str:
+    estonian = "\n".join(f"[{sub.index}] {sub.translated_text or sub.text}" for sub in subtitles)
+    sections = [
+        f"Source file: {source_name}",
+        f"Term sheet:\n{term_sheet}" if term_sheet else "",
+        f"Complete English source:\n{numbered(subtitles)}",
+        f"Complete Estonian translation:\n{estonian}",
+        f"Check subtitles [{batch[0].index}] to [{batch[-1].index}]. A sentence may run across "
+        "several subtitles, so read neighbouring subtitles together before deciding.",
+        _CHECK_RULES,
+    ]
+    return "\n\n".join(section for section in sections if section)

@@ -31,8 +31,10 @@ from mkv_subtitle_translator.models import (
 from mkv_subtitle_translator.progress import BatchProgress
 from mkv_subtitle_translator.prompts import (
     BATCH_SYSTEM_PROMPT,
+    CHECK_SYSTEM_PROMPT,
     TERM_SHEET_SYSTEM_PROMPT,
     batch_prompt,
+    check_prompt,
     term_sheet_prompt,
 )
 
@@ -434,6 +436,73 @@ Preserve any formatting or emphasis from the original."""
         print(f"Term sheet saved: {path}")
         return sheet
 
+    def _check_errors(
+        self, subtitles: list[Subtitle], source_name: str, term_sheet: str, batch_size: int
+    ) -> int:
+        """Correct real errors and return how many cues changed. The file is already
+        written, so a failed check costs only the corrections it would have made."""
+        max_output = self.client.model_config.get("max_output", 65_536)
+        batches = [subtitles[i : i + batch_size] for i in range(0, len(subtitles), batch_size)]
+        originals: dict[str, str] = {}
+        checked = 0
+
+        def call(number: int, batch: list[Subtitle]) -> tuple[str, int, int]:
+            progress.start_batch(
+                number,
+                (batch[0].index, batch[-1].index),
+                len(batch),
+                self.client.model_config["name"],
+            )
+            return self.client.translate(
+                CHECK_SYSTEM_PROMPT,
+                check_prompt(source_name, term_sheet, subtitles, batch),
+                max_tokens=min(len(batch) * 80, max_output),
+                progress=functools.partial(progress.report, number),
+            )
+
+        def finish(number: int, batch: list[Subtitle], future: concurrent.futures.Future) -> None:
+            nonlocal checked
+            try:
+                reply, input_tokens, output_tokens = future.result()
+            except QuotaExhausted:
+                raise
+            except Exception as e:
+                progress.report(number, f"Error: {e}")
+                progress.finish_batch(number, 0, len(batch))
+                return
+
+            self.stats.input_tokens += input_tokens
+            self.stats.output_tokens += output_tokens
+            corrections = _parse_numbered(reply)
+            for sub in batch:
+                old = sub.translated_text or sub.text
+                new = corrections.get(sub.index)
+                if new and new != old:
+                    originals[sub.index] = old
+                    sub.translated_text = new
+            checked += 1
+            progress.finish_batch(number, len(batch), 0)
+
+        with BatchProgress(
+            total=len(subtitles),
+            batches=len(batches),
+            stage="Checking",
+            label="Check",
+            done="checked",
+        ) as progress:
+            try:
+                self._run_batches(batches, call, finish)
+            except QuotaExhausted as e:
+                print(f"Error check stopped: {e}")
+
+        print(f"Error check corrected {len(originals)} subtitles:")
+        for sub in subtitles:
+            if sub.index in originals:
+                print(f"  #{sub.index}: {originals[sub.index]} -> {sub.translated_text}")
+        if checked < len(batches):
+            print(f"{len(batches) - checked} of {len(batches)} batches could not be checked")
+        return len(originals)
+
     def translate_file(
         self,
         subtitles: list[Subtitle],
@@ -445,6 +514,7 @@ Preserve any formatting or emphasis from the original."""
         max_workers: int = 8,
     ) -> None:
         """Run every stage for one file and write the result."""
+        chunk_size = self._chunk_size(chunk_size)
         self.stats = TranslationStats(total_subtitles=len(subtitles))
         self.stats.start_time = datetime.now()
 
@@ -460,6 +530,8 @@ Preserve any formatting or emphasis from the original."""
             subtitles, chunk_size, max_workers, source_name=source_name, term_sheet=term_sheet
         )
         self.write_srt(subtitles, output_path)
+        if batch_mode and self._check_errors(subtitles, source_name, term_sheet, chunk_size):
+            self.write_srt(subtitles, output_path)
 
         self.stats.end_time = datetime.now()
         self.stats.estimated_cost = self.client.estimate_cost(

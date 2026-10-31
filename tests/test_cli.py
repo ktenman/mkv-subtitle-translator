@@ -70,7 +70,8 @@ def test_estimate_adds_the_term_sheet_for_batch_models_only():
     from mkv_subtitle_translator.cli import _estimated_tokens
 
     assert _estimated_tokens(964, "gpt-5.4-pro") == (144_600, 28_920)
-    assert _estimated_tokens(964, "gpt-5.6-sol") == (156_168, 29_920)
+    assert _estimated_tokens(964, "gpt-5.6-sol") == (638_168, 29_920)
+    assert _estimated_tokens(2_790, "gpt-5.6-sol")[0] == 4_357_980
 
 
 def test_translates_through_translate_file(tmp_path, mocker):

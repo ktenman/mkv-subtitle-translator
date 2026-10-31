@@ -64,6 +64,16 @@ names and series terms stay the same across episodes. One earlier episode is eno
 helps series terms, not style or general accuracy. Only the term sheet call reads it, so
 a saved sheet means the file is not read, and the run says so.
 
+## Error check
+
+After translation, one more pass reads the whole title in English and Estonian and
+corrects only real errors: wrong meaning, a name or term that differs from the sheet,
+the wrong sina or teie, and grammar or spelling. It does not restyle correct lines, and
+it prints each change as old and new text.
+
+The output is written before the check starts, so a failed check loses nothing. On
+`codex`, a 964-cue episode takes about 11 minutes with the term sheet and the check.
+
 ## Translation progress
 
 Batches run five at a time on the `codex` and `claude` models and one at a time on
