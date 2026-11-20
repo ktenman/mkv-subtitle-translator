@@ -65,7 +65,42 @@ class TestReadSrt:
         ]
 
 
+def _timed(*cues):
+    return [
+        Subtitle(index=str(i), timestamp=ts, text="English", translated_text=text)
+        for i, (ts, text) in enumerate(cues, 1)
+    ]
+
+
 class TestWriteSrt:
+    def test_extends_end_into_the_pause(self, tmp_path):
+        subs = _timed(
+            ("00:00:01,000 --> 00:00:02,000", "x" * 45),
+            ("00:00:10,000 --> 00:00:11,000", "Jah."),
+        )
+        out = tmp_path / "out.srt"
+        OpenRouterTranslator("dummy-key").write_srt(subs, str(out))
+        assert "1\n00:00:01,000 --> 00:00:04,000\n" in out.read_text(encoding="utf-8-sig")
+
+    def test_never_reaches_the_next_line(self, tmp_path):
+        subs = _timed(
+            ("00:00:01,000 --> 00:00:02,000", "x" * 45),
+            ("00:00:02,500 --> 00:00:03,500", "Jah."),
+        )
+        out = tmp_path / "out.srt"
+        OpenRouterTranslator("dummy-key").write_srt(subs, str(out))
+        assert "1\n00:00:01,000 --> 00:00:02,416\n" in out.read_text(encoding="utf-8-sig")
+
+    def test_writing_twice_gives_the_same_file(self, tmp_path):
+        subs = _timed(("00:00:01,000 --> 00:00:02,000", "x" * 45))
+        out = tmp_path / "out.srt"
+        translator = OpenRouterTranslator("dummy-key")
+        translator.write_srt(subs, str(out))
+        first = out.read_bytes()
+        translator.write_srt(subs, str(out))
+        assert out.read_bytes() == first
+        assert subs[0].timestamp == "00:00:01,000 --> 00:00:02,000"
+
     def test_two_speaker_block_keeps_its_two_lines(self, tmp_path):
         translator = OpenRouterTranslator("dummy-key")
         sub = Subtitle(
@@ -441,6 +476,21 @@ def _backend(sheet="Code -> kood", check="NONE", tokens=(0, 0)):
 
 def _cues(count=3):
     return [Subtitle(index=str(i), timestamp="t", text=f"Line {i}") for i in range(1, count + 1)]
+
+
+def test_prints_reading_speed(mocker, tmp_path, capsys):
+    translator = OpenRouterTranslator("", "codex")
+    mocker.patch.object(translator.client, "translate", side_effect=_backend())
+    cues = [
+        Subtitle(index="1", timestamp="00:00:01,000 --> 00:00:01,100", text="Hi"),  # gets 1 s
+        Subtitle(index="2", timestamp="00:00:05,000 --> 00:00:05,100", text="Hi"),  # no room
+        Subtitle(index="3", timestamp="00:00:05,150 --> 00:00:06,000", text="Hi"),
+    ]
+    translator.translate_file(cues, str(tmp_path / "show.et.srt"), source_name="show.srt")
+    assert (
+        "Reading speed: 1 of 3 lines over 17 cps (2 with the English timing)"
+        in capsys.readouterr().out
+    )
 
 
 class TestEnglishNeverPassesAsEstonian:

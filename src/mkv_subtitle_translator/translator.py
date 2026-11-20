@@ -40,6 +40,7 @@ from mkv_subtitle_translator.prompts import (
     check_prompt,
     term_sheet_prompt,
 )
+from mkv_subtitle_translator.timing import LIMIT_CPS, over_speed, retimed
 
 # Openers mapped to the closers that count as a matching pair.
 _QUOTE_PAIRS = {'"': '"', "'": "'", "„": "“”", "“": "”", "«": "»"}
@@ -601,12 +602,25 @@ Preserve any formatting or emphasis from the original."""
             self.write_srt(subtitles, output_path)
         if batch_mode and self._check_errors(subtitles, output_path, source_name, term_sheet):
             marker.unlink(missing_ok=True)
+        self._print_reading_speed(subtitles, output_path)
 
         self.stats.end_time = datetime.now()
         self.stats.estimated_cost = self.client.estimate_cost(
             self.stats.input_tokens, self.stats.output_tokens
         )
         self._print_stats()
+
+    def _print_reading_speed(self, subtitles: list[Subtitle], output_path: str) -> None:
+        """Measure the file as written, and the same lines on the English timing."""
+        written = self.read_srt(output_path)
+        english = {sub.index: sub.timestamp for sub in subtitles}
+        texts = [sub.text for sub in written]
+        now = over_speed([sub.timestamp for sub in written], texts)
+        before = over_speed([english.get(sub.index, sub.timestamp) for sub in written], texts)
+        print(
+            f"Reading speed: {now:,} of {len(written):,} lines over {LIMIT_CPS} cps "
+            f"({before:,} with the English timing)"
+        )
 
     def translate_subtitles(
         self,
@@ -677,11 +691,13 @@ Preserve any formatting or emphasis from the original."""
         """Write translated subtitles to a new SRT file"""
         # ponytail: a kill mid-write leaves the .tmp behind, and the next write replaces it.
         temp_path = f"{output_path}.tmp"
+        texts = [sub.translated_text or sub.text for sub in subtitles]
+        stamps = retimed([sub.timestamp for sub in subtitles], texts)
         with open(temp_path, "w", encoding="utf-8-sig") as file:
-            for subtitle in subtitles:
-                text = _CURLY_QUOTES.sub('"', subtitle.translated_text or subtitle.text)
+            for subtitle, text, stamp in zip(subtitles, texts, stamps, strict=True):
+                text = _CURLY_QUOTES.sub('"', text)
                 text = restore_line_break(text, subtitle.source_lines)
-                file.write(f"{subtitle.index}\n{subtitle.timestamp}\n{text}\n\n")
+                file.write(f"{subtitle.index}\n{stamp}\n{text}\n\n")
         os.replace(temp_path, output_path)
 
 
