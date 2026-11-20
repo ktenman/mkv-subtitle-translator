@@ -18,7 +18,9 @@ endearments (kallis, kullake, armas) NOT literal translations like "mesi"
 9. Keep sound effects in brackets: [door slams] → [uks paugub]
 10. Preserve any formatting (italics, dashes for speaker changes)
 11. Use the names, terms and sina or teie from the term sheet.
-12. Lines under "Context only" are for understanding. Do not return them."""
+12. Lines under "Context only" are for understanding. Do not return them.
+13. A line under "Character limits" must fit its limit. Drop fillers, repeated words, \
+stutters and what the picture shows. Swearing is not a filler; keep it. Never drop meaning."""
 
 TERM_SHEET_SYSTEM_PROMPT = """You are preparing a short term sheet for an English to Estonian \
 subtitle translator. The translator works in separate batches with no memory, so this sheet is \
@@ -45,13 +47,21 @@ something important left out
 - a name or term that differs from the term sheet
 - the wrong sina or teie
 - an Estonian grammar or spelling error
+- a line longer than its character limit that can be shorter without losing meaning or swearing
 
-Leave every other subtitle as it is. Do not improve style, change word choice or shorten.
+Leave every other subtitle as it is. Do not improve style, change word choice or shorten, \
+except to fit a character limit. Do not put back words left out to fit one.
 Return only the subtitles you correct, as [number] text. If none need correcting, return NONE."""
 
 
 def numbered(subtitles: list[Subtitle]) -> str:
     return "\n".join(f"[{sub.index}] {sub.text}" for sub in subtitles)
+
+
+def _limits(limits: dict[str, int], batch: list[Subtitle]) -> str:
+    """The batch's share of the title's character limits."""
+    lines = [f"[{sub.index}] {limits[sub.index]}" for sub in batch if sub.index in limits]
+    return ("Character limits:\n" + "\n".join(lines)) if lines else ""
 
 
 def batch_prompt(
@@ -60,6 +70,7 @@ def batch_prompt(
     before: list[Subtitle],
     batch: list[Subtitle],
     after: list[Subtitle],
+    limits: dict[str, int],
 ) -> str:
     sections = [
         f"Source file: {source_name}" if source_name else "",
@@ -67,6 +78,7 @@ def batch_prompt(
         f"Context only, earlier subtitles:\n{numbered(before)}" if before else "",
         f"Translate all {len(batch)} subtitles below to Estonian. "
         f"Return each line as [number] Estonian translation.\n\n{numbered(batch)}",
+        _limits(limits, batch),
         f"Context only, later subtitles:\n{numbered(after)}" if after else "",
     ]
     return "\n\n".join(section for section in sections if section)
@@ -85,7 +97,11 @@ def term_sheet_prompt(source_name: str, subtitles: list[Subtitle], references: l
 
 
 def check_prompt(
-    source_name: str, term_sheet: str, subtitles: list[Subtitle], batch: list[Subtitle]
+    source_name: str,
+    term_sheet: str,
+    subtitles: list[Subtitle],
+    batch: list[Subtitle],
+    limits: dict[str, int],
 ) -> str:
     estonian = "\n".join(f"[{sub.index}] {sub.translated_text or sub.text}" for sub in subtitles)
     sections = [
@@ -93,6 +109,7 @@ def check_prompt(
         f"Term sheet:\n{term_sheet}" if term_sheet else "",
         f"Complete English source:\n{numbered(subtitles)}",
         f"Complete Estonian translation:\n{estonian}",
+        _limits(limits, batch),
         f"Check subtitles [{batch[0].index}] to [{batch[-1].index}]. A sentence may run across "
         "several subtitles, so read neighbouring subtitles together before deciding.",
         _CHECK_RULES,

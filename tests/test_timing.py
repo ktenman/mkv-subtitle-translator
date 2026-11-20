@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import pytest
 
+from mkv_subtitle_translator.models import Subtitle
 from mkv_subtitle_translator.timing import (
+    char_limits,
     over_speed,
     parse_timestamp,
     readable_end,
@@ -59,3 +61,28 @@ def test_out_of_order_lines_never_overlap():
 def test_lines_sharing_a_start_are_left_alone():
     stamps = ["00:00:01,000 --> 00:00:02,000"] * 2
     assert retimed(stamps, ["x" * 100] * 2) == stamps
+
+
+def _sub(i, ts, text):
+    return Subtitle(index=str(i), timestamp=ts, text=text)
+
+
+def test_no_limit_when_the_line_has_time():
+    assert char_limits([_sub(1, "00:00:01,000 --> 00:00:02,000", "x" * 40)]) == {}
+
+
+def test_limit_when_the_next_line_leaves_no_time():
+    subs = [
+        _sub(1, "00:00:01,000 --> 00:00:01,800", "x" * 40),
+        _sub(2, "00:00:01,900 --> 00:00:03,000", "Yes."),
+    ]
+    assert char_limits(subs) == {"1": 13}  # 0.816 s x 17 cps
+
+
+def test_no_limit_for_a_cue_with_no_time():
+    backwards = [_sub(1, "00:00:05,000 --> 00:00:02,000", "x" * 40)]
+    flash = [
+        _sub(1, "00:00:05,000 --> 00:00:05,040", "x" * 40),
+        _sub(2, "00:00:05,100 --> 00:00:06,000", "Jah."),
+    ]
+    assert char_limits(backwards) == char_limits(flash) == {}
