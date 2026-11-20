@@ -65,7 +65,7 @@ Merging subtitles into episode.mkv
   ✅ Successfully merged subtitles
 ```
 
-The Estonian lines keep the English start times. A line that needs more reading time stays up to 2 s longer into the pause after it, at most 7 s in all, and never closer than two frames to the next line. `Reading speed` counts the lines still over 17 characters per second, and how many there would be on the English timing.
+The Estonian lines keep the English start times. A line that needs more reading time stays up to 2 s longer into the pause after it, at most 7 s in all, and never closer than two frames to the next line. A line that cannot get enough time gets a character limit, and the model fits it by dropping fillers, repeated words and stutters, never meaning or swearing. `Reading speed` counts the lines still over 17 characters per second, and how many there would be on the English timing.
 
 It chose the plain English track over the SDH one and left these files next to the video:
 

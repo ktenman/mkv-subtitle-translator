@@ -6,6 +6,7 @@ import re
 from bisect import bisect_left
 
 from mkv_subtitle_translator.linebreak import _visible
+from mkv_subtitle_translator.models import Subtitle
 
 GAP = 0.084  # two frames before the next line
 MAX_SHOWN = 7.0
@@ -47,22 +48,46 @@ def readable_end(start: float, end: float, next_start: float | None, chars: int)
     return max(end, min(needed, latest_end(start, end, next_start)))
 
 
-def retimed(timestamps: list[str], texts: list[str]) -> list[str]:
-    """Timestamps with later end times where a line needs them. Unreadable ones stay as given."""
+def _spans(timestamps: list[str]) -> list[tuple[float, float, float | None] | None]:
+    """(start, end, next line's start) for each timestamp, or None when it does not parse."""
     parsed = [parse_timestamp(ts) for ts in timestamps]
     # The next start in time, not in file order. A shared start counts as next, so it blocks.
     starts = sorted(p[0] for p in parsed if p)
-    out = []
-    for ts, times, text in zip(timestamps, parsed, texts, strict=True):
+    spans = []
+    for times in parsed:
         if times is None:
+            spans.append(None)
+            continue
+        j = bisect_left(starts, times[0]) + 1
+        spans.append((*times, starts[j] if j < len(starts) else None))
+    return spans
+
+
+def retimed(timestamps: list[str], texts: list[str]) -> list[str]:
+    """Timestamps with later end times where a line needs them. Unreadable ones stay as given."""
+    out = []
+    for ts, span, text in zip(timestamps, _spans(timestamps), texts, strict=True):
+        if span is None:
             out.append(ts)
             continue
-        start, end = times
-        j = bisect_left(starts, start) + 1
-        next_start = starts[j] if j < len(starts) else None
+        start, end, next_start = span
         new_end = readable_end(start, end, next_start, visible_chars(text))
         out.append(f"{_clock(start)} --> {_clock(new_end)}")
     return out
+
+
+def char_limits(subtitles: list[Subtitle]) -> dict[str, int]:
+    """A limit for each line whose English is longer than its longest possible time allows.
+    The Estonian runs about as long as the English, so these are the lines to shorten."""
+    limits = {}
+    for sub, span in zip(subtitles, _spans([s.timestamp for s in subtitles]), strict=True):
+        if span is None:
+            continue
+        start, end, next_start = span
+        limit = int((latest_end(start, end, next_start) - start) * LIMIT_CPS)
+        if 0 < limit < visible_chars(sub.text):  # a cue with no time gets no limit
+            limits[sub.index] = limit
+    return limits
 
 
 def over_speed(timestamps: list[str], texts: list[str]) -> int:

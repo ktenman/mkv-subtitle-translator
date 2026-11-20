@@ -8,12 +8,15 @@ def _subs(*numbers):
     return [Subtitle(index=str(n), timestamp="t", text=f"Line {n}") for n in numbers]
 
 
-def test_keeps_the_ten_rules_and_adds_two():
+def test_keeps_the_ten_rules_and_adds_three():
     assert (
         "10. Preserve any formatting (italics, dashes for speaker changes)" in BATCH_SYSTEM_PROMPT
     )
     assert "11. Use the names, terms and sina or teie from the term sheet." in BATCH_SYSTEM_PROMPT
     assert '12. Lines under "Context only" are for understanding.' in BATCH_SYSTEM_PROMPT
+    assert '13. A line under "Character limits" must fit its limit.' in BATCH_SYSTEM_PROMPT
+    assert "Never drop meaning." in BATCH_SYSTEM_PROMPT
+    assert "Swearing is not a filler; keep it." in BATCH_SYSTEM_PROMPT
 
 
 def test_has_no_layout_rules():
@@ -22,7 +25,7 @@ def test_has_no_layout_rules():
 
 
 def test_orders_sheet_context_and_batch():
-    prompt = batch_prompt("show.srt", "Code -> kood", _subs(1), _subs(2, 3), _subs(4))
+    prompt = batch_prompt("show.srt", "Code -> kood", _subs(1), _subs(2, 3), _subs(4), {})
     assert prompt == (
         "Source file: show.srt\n\n"
         "Term sheet:\nCode -> kood\n\n"
@@ -34,7 +37,7 @@ def test_orders_sheet_context_and_batch():
 
 
 def test_leaves_out_empty_sections():
-    prompt = batch_prompt("show.srt", "", [], _subs(1), [])
+    prompt = batch_prompt("show.srt", "", [], _subs(1), [], {})
     assert "Term sheet" not in prompt
     assert "Context only" not in prompt
 
@@ -44,10 +47,28 @@ def test_check_prompt_carries_the_whole_title_and_the_range():
     for sub in subs:
         sub.translated_text = f"Rida {sub.index}"
 
-    prompt = check_prompt("show.srt", "Code -> kood", subs, subs[1:2])
+    prompt = check_prompt("show.srt", "Code -> kood", subs, subs[1:2], {})
 
     assert "Term sheet:\nCode -> kood" in prompt
     assert "Complete English source:\n[1] Line 1\n[2] Line 2\n[3] Line 3" in prompt
     assert "Complete Estonian translation:\n[1] Rida 1\n[2] Rida 2\n[3] Rida 3" in prompt
     assert "Check subtitles [2] to [2]." in prompt
     assert "If none need correcting, return NONE." in prompt
+
+
+def test_lists_character_limits_after_the_batch():
+    prompt = batch_prompt("show.srt", "", [], _subs(2, 3), _subs(4), limits={"2": 20, "9": 5})
+    assert "[3] Line 3\n\nCharacter limits:\n[2] 20\n\nContext only, later subtitles:" in prompt
+
+
+def test_no_limits_section_without_limits():
+    assert "Character limits" not in batch_prompt("show.srt", "", [], _subs(2, 3), _subs(4), {})
+
+
+def test_check_prompt_lists_limits_and_allows_fitting_them():
+    subs = _subs(1, 2)
+    prompt = check_prompt("show.srt", "", subs, subs, limits={"1": 10})
+    assert "Character limits:\n[1] 10" in prompt
+    assert "except to fit a character limit" in prompt
+    assert "Do not put back words left out to fit one." in prompt
+    assert "without losing meaning or swearing" in prompt

@@ -493,6 +493,19 @@ def test_prints_reading_speed(mocker, tmp_path, capsys):
     )
 
 
+def test_fast_lines_get_a_limit_in_translation_and_check(mocker, tmp_path):
+    translator = OpenRouterTranslator("", "codex")
+    translate = mocker.patch.object(translator.client, "translate", side_effect=_backend())
+    cues = [
+        Subtitle(index="1", timestamp="00:00:01,000 --> 00:00:01,800", text="x" * 40),
+        Subtitle(index="2", timestamp="00:00:01,900 --> 00:00:03,000", text="Yes."),
+    ]
+    translator.translate_file(cues, str(tmp_path / "show.et.srt"), source_name="show.srt")
+    users = {c.args[0]: c.args[1] for c in translate.call_args_list}
+    assert "Character limits:\n[1] 13" in users[BATCH_SYSTEM_PROMPT]
+    assert "Character limits:\n[1] 13" in users[CHECK_SYSTEM_PROMPT]
+
+
 class TestEnglishNeverPassesAsEstonian:
     def test_a_backend_that_always_fails_writes_nothing(self, mocker, tmp_path):
         translator = OpenRouterTranslator("", "codex")

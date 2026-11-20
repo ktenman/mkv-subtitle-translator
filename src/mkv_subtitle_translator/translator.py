@@ -40,7 +40,7 @@ from mkv_subtitle_translator.prompts import (
     check_prompt,
     term_sheet_prompt,
 )
-from mkv_subtitle_translator.timing import LIMIT_CPS, over_speed, retimed
+from mkv_subtitle_translator.timing import LIMIT_CPS, char_limits, over_speed, retimed
 
 # Openers mapped to the closers that count as a matching pair.
 _QUOTE_PAIRS = {'"': '"', "'": "'", "„": "“”", "“": "”", "«": "»"}
@@ -344,6 +344,8 @@ Preserve any formatting or emphasis from the original."""
     ) -> None:
         batches = [subtitles[i : i + batch_size] for i in range(0, len(subtitles), batch_size)]
 
+        limits = char_limits(subtitles)
+
         def call(number: int, batch: list[Subtitle]) -> tuple[str, int, int]:
             progress.start_batch(
                 number,
@@ -359,6 +361,7 @@ Preserve any formatting or emphasis from the original."""
                 subtitles[max(0, start - self.context_window_size) : start],
                 batch,
                 subtitles[end : end + self.context_window_size],
+                limits,
             )
 
             # 16K tokens is enough for 200 subs (~80 tokens each with overhead)
@@ -481,6 +484,7 @@ Preserve any formatting or emphasis from the original."""
         batches = [subtitles[i : i + batch_size] for i in range(0, len(subtitles), batch_size)]
         originals: dict[str, str] = {}
         checked = 0
+        limits = char_limits(subtitles)
 
         def call(number: int, batch: list[Subtitle]) -> tuple[str, int, int]:
             progress.start_batch(
@@ -491,7 +495,7 @@ Preserve any formatting or emphasis from the original."""
             )
             return self.client.translate(
                 CHECK_SYSTEM_PROMPT,
-                check_prompt(source_name, term_sheet, subtitles, batch),
+                check_prompt(source_name, term_sheet, subtitles, batch, limits),
                 max_tokens=min(len(batch) * 80, max_output),
                 progress=functools.partial(progress.report, number),
             )
