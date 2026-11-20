@@ -56,6 +56,7 @@ Batch 1/1 finished in 01:03: 12 translated, 0 failed | 12/12 processed; 12 trans
 Check 1/1: subtitles 1-12 (12 subtitles) | GPT-6.2 Sol (Codex CLI)
 Check 1/1 finished in 00:38: 12 checked, 0 failed | 12/12 processed; 12 checked, 0 failed
 Error check corrected 0 subtitles
+Reading speed: 2 of 12 lines over 17 cps (5 with the English timing)
 ✅ Saved to: episode.et.srt
 
 Merging subtitles into episode.mkv
@@ -63,6 +64,8 @@ Merging subtitles into episode.mkv
   Creating backup: episode.mkv.backup
   ✅ Successfully merged subtitles
 ```
+
+The Estonian lines keep the English start times. A line that needs more reading time stays up to 2 s longer into the pause after it, at most 7 s in all, and never closer than two frames to the next line. `Reading speed` counts the lines still over 17 characters per second, and how many there would be on the English timing.
 
 It chose the plain English track over the SDH one and left these files next to the video:
 

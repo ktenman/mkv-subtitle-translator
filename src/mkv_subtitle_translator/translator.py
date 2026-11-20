@@ -40,6 +40,7 @@ from mkv_subtitle_translator.prompts import (
     check_prompt,
     term_sheet_prompt,
 )
+from mkv_subtitle_translator.timing import over_speed, retimed
 
 # Openers mapped to the closers that count as a matching pair.
 _QUOTE_PAIRS = {'"': '"', "'": "'", "„": "“”", "“": "”", "«": "»"}
@@ -601,12 +602,22 @@ Preserve any formatting or emphasis from the original."""
             self.write_srt(subtitles, output_path)
         if batch_mode and self._check_errors(subtitles, output_path, source_name, term_sheet):
             marker.unlink(missing_ok=True)
+        self._print_reading_speed(subtitles)
 
         self.stats.end_time = datetime.now()
         self.stats.estimated_cost = self.client.estimate_cost(
             self.stats.input_tokens, self.stats.output_tokens
         )
         self._print_stats()
+
+    def _print_reading_speed(self, subtitles: list[Subtitle]) -> None:
+        texts = [sub.translated_text or sub.text for sub in subtitles]
+        source = [sub.timestamp for sub in subtitles]
+        now = over_speed(retimed(source, texts), texts)
+        print(
+            f"Reading speed: {now:,} of {len(subtitles):,} lines over 17 cps "
+            f"({over_speed(source, texts):,} with the English timing)"
+        )
 
     def translate_subtitles(
         self,
@@ -677,11 +688,13 @@ Preserve any formatting or emphasis from the original."""
         """Write translated subtitles to a new SRT file"""
         # ponytail: a kill mid-write leaves the .tmp behind, and the next write replaces it.
         temp_path = f"{output_path}.tmp"
+        texts = [sub.translated_text or sub.text for sub in subtitles]
+        stamps = retimed([sub.timestamp for sub in subtitles], texts)
         with open(temp_path, "w", encoding="utf-8-sig") as file:
-            for subtitle in subtitles:
-                text = _CURLY_QUOTES.sub('"', subtitle.translated_text or subtitle.text)
+            for subtitle, text, stamp in zip(subtitles, texts, stamps, strict=True):
+                text = _CURLY_QUOTES.sub('"', text)
                 text = restore_line_break(text, subtitle.source_lines)
-                file.write(f"{subtitle.index}\n{subtitle.timestamp}\n{text}\n\n")
+                file.write(f"{subtitle.index}\n{stamp}\n{text}\n\n")
         os.replace(temp_path, output_path)
 
 

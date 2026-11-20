@@ -60,7 +60,9 @@ def retimed(timestamps: list[str], texts: list[str]) -> list[str]:
             continue
         start, end = times
         next_start = next((p[0] for p in parsed[i + 1 :] if p), None)
-        out.append(format_timestamp(start, readable_end(start, end, next_start, visible_chars(text))))
+        out.append(
+            format_timestamp(start, readable_end(start, end, next_start, visible_chars(text)))
+        )
     return out
 
 
