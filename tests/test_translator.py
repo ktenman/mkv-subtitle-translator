@@ -205,7 +205,7 @@ class TestBatchTranslate:
         assert "Batch 1/2" in snapshots[0]
         assert "10-20" in snapshots[0]
         assert "2 subtitles" in snapshots[0]
-        assert "GPT-6 Astra" in snapshots[0]
+        assert "GPT-6.2 Sol" in snapshots[0]
         assert "Batch 2/2" in snapshots[1]
         assert "30-30" in snapshots[1]
         assert all(sub.translated_text == "Tere" for sub in subtitles)

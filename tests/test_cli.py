@@ -193,7 +193,7 @@ def test_the_run_starts_by_saying_what_it_will_use(tmp_path, mocker):
     result = runner.invoke(app, ["-f", str(srt), "--effort", "low", "--reference", str(reference)])
 
     assert f"Input: {srt}" in result.output
-    assert "Model: GPT-6 Astra (Codex CLI), low effort (high for the term sheet)" in result.output
+    assert "Model: GPT-6.2 Sol (Codex CLI), low effort (high for the term sheet)" in result.output
     assert f"Reference: {reference}" in result.output
 
 
