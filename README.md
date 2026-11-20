@@ -34,7 +34,7 @@ It prints this, shortened here:
 
 ```text
 Input: episode.mkv
-Model: GPT-6 Astra (Codex CLI), max effort (high for the term sheet)
+Model: GPT-6.2 Sol (Codex CLI), max effort (high for the term sheet)
 
 Extracting subtitles from episode.mkv
   Found 3 subtitle stream(s)
@@ -47,13 +47,13 @@ Extracting subtitles from episode.mkv
 
 Processing: episode.extracted.srt
 Found 12 unique subtitles
-Term sheet 1/1: subtitles 1-12 (12 subtitles) | GPT-6 Astra (Codex CLI)
+Term sheet 1/1: subtitles 1-12 (12 subtitles) | GPT-6.2 Sol (Codex CLI)
 Term sheet 1/1 finished in 00:31: 1 written, 0 failed | 1/1 processed; 1 written, 0 failed
 Term sheet saved: episode.et.terms.md
 Term sheet in use: 16 lines, sent with every translation and check
-Batch 1/1: subtitles 1-12 (12 subtitles) | GPT-6 Astra (Codex CLI)
+Batch 1/1: subtitles 1-12 (12 subtitles) | GPT-6.2 Sol (Codex CLI)
 Batch 1/1 finished in 01:03: 12 translated, 0 failed | 12/12 processed; 12 translated, 0 failed
-Check 1/1: subtitles 1-12 (12 subtitles) | GPT-6 Astra (Codex CLI)
+Check 1/1: subtitles 1-12 (12 subtitles) | GPT-6.2 Sol (Codex CLI)
 Check 1/1 finished in 00:38: 12 checked, 0 failed | 12/12 processed; 12 checked, 0 failed
 Error check corrected 0 subtitles
 ✅ Saved to: episode.et.srt
@@ -344,7 +344,7 @@ mkv-subtitle-translator --list-models
 ┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃ Key         ┃ Name                     ┃ $/1M tokens ┃ Best for                       ┃
 ┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
-│ codex       │ GPT-6 Astra (Codex CLI)  │       $0.00 │ films, drama, everything       │
+│ codex       │ GPT-6.2 Sol (Codex CLI)  │       $0.00 │ films, drama, everything       │
 │ claude      │ Opus 5 (Claude Code CLI) │       $0.00 │ films, drama, complex dialogue │
 │ gpt-5.6-sol │ GPT-5.6 Sol              │      $12.00 │ films, drama, everything       │
 ...
@@ -421,7 +421,7 @@ On `codex`, a 964-subtitle episode took about 10 minutes: 1 for the term sheet, 
 While calls are running, the terminal shows which batches have started and how long they have been waiting:
 
 ```text
-Batch 1/5: subtitles 1-200 (200 subtitles) | GPT-6 Astra (Codex CLI)
+Batch 1/5: subtitles 1-200 (200 subtitles) | GPT-6.2 Sol (Codex CLI)
 Translating:   0%|          | 0/964, 0/5 batches done, 5 running | 01:05 elapsed | Waiting for Codex response (max effort; timeout 30m per call)
 ```
 

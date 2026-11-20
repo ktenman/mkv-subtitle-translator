@@ -76,7 +76,7 @@ class TestTranslate:
     @pytest.mark.parametrize(
         ("kwargs", "expected_effort"), [({}, "max"), ({"effort": "high"}, "high")]
     )
-    def test_passes_astra_and_effort_to_codex(self, mocker, kwargs, expected_effort):
+    def test_passes_sol_and_effort_to_codex(self, mocker, kwargs, expected_effort):
         run = mocker.patch(
             "mkv_subtitle_translator.backends.subprocess.run", side_effect=_fake_run()
         )
@@ -84,7 +84,7 @@ class TestTranslate:
 
         cmd = run.call_args.args[0]
         assert cmd[:2] == ["codex", "exec"]
-        assert cmd[cmd.index("-m") + 1] == "gpt-6-astra"
+        assert cmd[cmd.index("-m") + 1] == "gpt-6.2-sol"
         assert cmd[cmd.index("-c") + 1] == f"model_reasoning_effort={expected_effort}"
         assert run.call_args.kwargs["input"] == "system\n\nuser"
 
