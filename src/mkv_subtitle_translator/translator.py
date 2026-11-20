@@ -40,7 +40,7 @@ from mkv_subtitle_translator.prompts import (
     check_prompt,
     term_sheet_prompt,
 )
-from mkv_subtitle_translator.timing import over_speed, retimed
+from mkv_subtitle_translator.timing import LIMIT_CPS, over_speed, retimed
 
 # Openers mapped to the closers that count as a matching pair.
 _QUOTE_PAIRS = {'"': '"', "'": "'", "„": "“”", "“": "”", "«": "»"}
@@ -602,7 +602,7 @@ Preserve any formatting or emphasis from the original."""
             self.write_srt(subtitles, output_path)
         if batch_mode and self._check_errors(subtitles, output_path, source_name, term_sheet):
             marker.unlink(missing_ok=True)
-        self._print_reading_speed(subtitles)
+        self._print_reading_speed(subtitles, output_path)
 
         self.stats.end_time = datetime.now()
         self.stats.estimated_cost = self.client.estimate_cost(
@@ -610,13 +610,16 @@ Preserve any formatting or emphasis from the original."""
         )
         self._print_stats()
 
-    def _print_reading_speed(self, subtitles: list[Subtitle]) -> None:
-        texts = [sub.translated_text or sub.text for sub in subtitles]
-        source = [sub.timestamp for sub in subtitles]
-        now = over_speed(retimed(source, texts), texts)
+    def _print_reading_speed(self, subtitles: list[Subtitle], output_path: str) -> None:
+        """Measure the file as written, and the same lines on the English timing."""
+        written = self.read_srt(output_path)
+        english = {sub.index: sub.timestamp for sub in subtitles}
+        texts = [sub.text for sub in written]
+        now = over_speed([sub.timestamp for sub in written], texts)
+        before = over_speed([english.get(sub.index, sub.timestamp) for sub in written], texts)
         print(
-            f"Reading speed: {now:,} of {len(subtitles):,} lines over 17 cps "
-            f"({over_speed(source, texts):,} with the English timing)"
+            f"Reading speed: {now:,} of {len(written):,} lines over {LIMIT_CPS} cps "
+            f"({before:,} with the English timing)"
         )
 
     def translate_subtitles(
