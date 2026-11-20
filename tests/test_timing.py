@@ -45,3 +45,17 @@ def test_the_next_line_bounds_the_one_before():
 def test_counts_lines_over_the_reading_speed():
     assert over_speed(["00:00:01,000 --> 00:00:02,000"], ["x" * 18]) == 1
     assert over_speed(["00:00:01,000 --> 00:00:02,000"], ["x" * 17]) == 0
+
+
+def test_out_of_order_lines_never_overlap():
+    stamps = [
+        "00:00:01,000 --> 00:00:02,000",
+        "00:00:10,000 --> 00:00:11,000",
+        "00:00:03,000 --> 00:00:04,000",
+    ]
+    assert retimed(stamps, ["x" * 45, "Jah.", "Jah."])[0] == "00:00:01,000 --> 00:00:02,916"
+
+
+def test_lines_sharing_a_start_are_left_alone():
+    stamps = ["00:00:01,000 --> 00:00:02,000"] * 2
+    assert retimed(stamps, ["x" * 100] * 2) == stamps

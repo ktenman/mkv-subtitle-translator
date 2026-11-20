@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from bisect import bisect_left
 
 from mkv_subtitle_translator.linebreak import _TAG
 
@@ -53,13 +54,16 @@ def readable_end(start: float, end: float, next_start: float | None, chars: int)
 def retimed(timestamps: list[str], texts: list[str]) -> list[str]:
     """Timestamps with later end times where a line needs them. Unreadable ones stay as given."""
     parsed = [parse_timestamp(ts) for ts in timestamps]
+    # The next start in time, not in file order. A shared start counts as next, so it blocks.
+    starts = sorted(p[0] for p in parsed if p)
     out = []
-    for i, (ts, times, text) in enumerate(zip(timestamps, parsed, texts, strict=True)):
+    for ts, times, text in zip(timestamps, parsed, texts, strict=True):
         if times is None:
             out.append(ts)
             continue
         start, end = times
-        next_start = next((p[0] for p in parsed[i + 1 :] if p), None)
+        j = bisect_left(starts, start) + 1
+        next_start = starts[j] if j < len(starts) else None
         out.append(
             format_timestamp(start, readable_end(start, end, next_start, visible_chars(text)))
         )
